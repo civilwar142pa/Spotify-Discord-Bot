@@ -1,0 +1,386 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import os
+from dotenv import load_dotenv
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+from spotipy.exceptions import SpotifyException
+
+load_dotenv()
+
+TOKEN = os.getenv('DISCORD_TOKEN')
+
+# Intents setup
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Spotify client
+class SpotifyClient:
+    def __init__(self):
+        load_dotenv()
+        
+        self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
+        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
+        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI')
+        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
+        
+        if not all([self.client_id, self.client_secret, self.redirect_uri, self.playlist_id]):
+            raise ValueError("❌ Missing Spotify credentials in .env file!")
+        
+        # Initialize Spotify
+        self.auth_manager = SpotifyOAuth(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            redirect_uri=self.redirect_uri,
+            scope='playlist-modify-public playlist-modify-private',
+            cache_path='.spotify_cache'
+        )
+        
+        self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
+        
+        # Test authentication
+        try:
+            user = self.sp.current_user()
+            print(f"✅ Spotify authenticated as: {user.get('display_name', user['id'])}")
+        except Exception as e:
+            print(f"⚠️  Spotify auth issue: {e}")
+            print("⚠️  First API call will trigger authentication")
+    
+    def search_and_add_top_result(self, song_query, artist_query=None):
+        """Search for a song and add the top result to playlist"""
+        try:
+            # Build search query
+            if artist_query:
+                search_query = f"{song_query} artist:{artist_query}"
+            else:
+                search_query = song_query
+            
+            print(f"🔍 Searching: {search_query}")
+            
+            # Search for the song (get top 5 to show options)
+            results = self.sp.search(q=search_query, type='track', limit=5)
+            
+            if not results['tracks']['items']:
+                return None, "No songs found with that search."
+            
+            # Get the top result
+            track = results['tracks']['items'][0]
+            track_uri = track['uri']
+            track_name = track['name']
+            artists = ', '.join([artist['name'] for artist in track['artists']])
+            
+            print(f"✅ Top result: {track_name} by {artists}")
+            
+            # Add to playlist
+            self.sp.playlist_add_items(self.playlist_id, [track_uri])
+            print(f"✅ Added to playlist: {self.playlist_id}")
+            
+            return track, f"Added '{track_name}' by {artists} to the playlist!"
+            
+        except SpotifyException as e:
+            print(f"❌ Spotify error: {e}")
+            return None, f"Spotify error: {e}"
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            return None, f"Error: {e}"
+    
+    def remove_song(self, song_query, artist_query=None):
+        """Remove a song from the playlist by searching"""
+        try:
+            # Build search query for removal
+            search_text = song_query
+            if artist_query:
+                search_text += f" {artist_query}"
+            
+            # Get current playlist tracks
+            playlist = self.sp.playlist(self.playlist_id)
+            tracks = playlist['tracks']['items']
+            
+            print(f"🔍 Searching playlist for: {search_text}")
+            
+            # Search through playlist tracks
+            for item in tracks:
+                track = item['track']
+                track_name = track['name'].lower()
+                artist_names = ' '.join([a['name'].lower() for a in track['artists']])
+                
+                # Check if query matches track name or artist
+                if (search_text.lower() in track_name or 
+                    search_text.lower() in artist_names or
+                    (artist_query and artist_query.lower() in artist_names)):
+                    
+                    # Remove the track
+                    self.sp.playlist_remove_all_occurrences_of_items(
+                        self.playlist_id, [track['uri']]
+                    )
+                    
+                    print(f"✅ Removed: {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
+                    return track, f"Removed '{track['name']}' by {', '.join([a['name'] for a in track['artists']])}"
+            
+            return None, "Song not found in playlist."
+            
+        except Exception as e:
+            print(f"❌ Error removing song: {e}")
+            return None, f"Error: {e}"
+    
+    def get_playlist_link(self):
+        """Get the public playlist link"""
+        try:
+            playlist = self.sp.playlist(self.playlist_id)
+            return playlist['external_urls']['spotify']
+        except Exception as e:
+            print(f"❌ Error getting playlist link: {e}")
+            return f"Error: {e}"
+
+# Initialize Spotify client
+spotify = SpotifyClient()
+
+@bot.event
+async def on_ready():
+    print(f'✅ {bot.user} has connected to Discord!')
+    
+    # Sync slash commands
+    try:
+        synced = await bot.tree.sync()
+        print(f'✅ Synced {len(synced)} slash command(s)')
+    except Exception as e:
+        print(f'❌ Error syncing commands: {e}')
+
+# SLASH COMMANDS
+@bot.tree.command(name="addsong", description="Add a song to the Spotify playlist")
+@app_commands.describe(
+    song="Name of the song",
+    artist="Artist name (optional)"
+)
+async def addsong(interaction: discord.Interaction, song: str, artist: str = None):
+    """Add the top search result to the playlist"""
+    # Defer response since Spotify API might take time
+    await interaction.response.defer()
+    
+    try:
+        # Search and add song
+        track, result = spotify.search_and_add_top_result(song, artist)
+        
+        if track:
+            # Create a beautiful embed
+            embed = discord.Embed(
+                title="✅ Song Added to Playlist",
+                color=discord.Color.green(),
+                description=f"**{track['name']}** has been added to the playlist!"
+            )
+            
+            # Add fields
+            embed.add_field(name="🎵 Song", value=track['name'], inline=True)
+            embed.add_field(name="🎤 Artist", value=', '.join([a['name'] for a in track['artists']]), inline=True)
+            embed.add_field(name="💿 Album", value=track['album']['name'], inline=True)
+            
+            # Add duration
+            duration_ms = track['duration_ms']
+            duration_min = f"{duration_ms // 60000}:{(duration_ms % 60000) // 1000:02d}"
+            embed.add_field(name="⏱️ Duration", value=duration_min, inline=True)
+            
+            # Add album art thumbnail
+            if track['album']['images']:
+                embed.set_thumbnail(url=track['album']['images'][0]['url'])
+            
+            # Add Spotify link
+            embed.add_field(
+                name="🔗 Listen on Spotify", 
+                value=f"[Open Song]({track['external_urls']['spotify']})",
+                inline=False
+            )
+            
+            # Set footer with user who added it
+            embed.set_footer(text=f"Added by {interaction.user.display_name}", 
+                           icon_url=interaction.user.display_avatar.url)
+            
+            await interaction.followup.send(embed=embed)
+        else:
+            # Error case
+            error_embed = discord.Embed(
+                title="❌ Could Not Add Song",
+                description=result,
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed)
+            
+    except Exception as e:
+        error_embed = discord.Embed(
+            title="❌ Error",
+            description=f"An error occurred: {str(e)[:200]}",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=error_embed)
+
+@bot.tree.command(name="deletesong", description="Remove a song from the playlist")
+@app_commands.describe(
+    song="Name of the song to remove",
+    artist="Artist name (optional)"
+)
+async def deletesong(interaction: discord.Interaction, song: str, artist: str = None):
+    """Remove a song from the playlist"""
+    await interaction.response.defer()
+    
+    try:
+        track, result = spotify.remove_song(song, artist)
+        
+        if track:
+            # Success embed
+            embed = discord.Embed(
+                title="✅ Song Removed from Playlist",
+                color=discord.Color.orange(),
+                description=f"**{track['name']}** has been removed from the playlist."
+            )
+            
+            embed.add_field(name="🎵 Song", value=track['name'], inline=True)
+            embed.add_field(name="🎤 Artist", value=', '.join([a['name'] for a in track['artists']]), inline=True)
+            
+            if track['album']['images']:
+                embed.set_thumbnail(url=track['album']['images'][0]['url'])
+            
+            embed.set_footer(text=f"Removed by {interaction.user.display_name}",
+                           icon_url=interaction.user.display_avatar.url)
+            
+            await interaction.followup.send(embed=embed)
+        else:
+            # Not found
+            embed = discord.Embed(
+                title="❌ Song Not Found",
+                description=result,
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+            
+    except Exception as e:
+        error_embed = discord.Embed(
+            title="❌ Error",
+            description=f"An error occurred: {str(e)[:200]}",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=error_embed)
+
+@bot.tree.command(name="spotifylink", description="Get the link to the Spotify playlist")
+async def spotifylink(interaction: discord.Interaction):
+    """Get the playlist link"""
+    await interaction.response.defer()
+    
+    try:
+        link = spotify.get_playlist_link()
+        
+        if "https://open.spotify.com" in link:
+            # Create embed with playlist link
+            embed = discord.Embed(
+                title="🎵 Spotify Playlist",
+                description=f"Click the link below to open the playlist in Spotify!",
+                color=discord.Color.green()
+            )
+            
+            # Try to get playlist info for nicer display
+            try:
+                playlist = spotify.sp.playlist(spotify.playlist_id)
+                if playlist['name']:
+                    embed.title = f"🎵 {playlist['name']}"
+                
+                if playlist['description']:
+                    embed.description = playlist['description'][:200]
+                
+                if playlist['images']:
+                    embed.set_thumbnail(url=playlist['images'][0]['url'])
+                
+                embed.add_field(name="📊 Total Tracks", value=playlist['tracks']['total'], inline=True)
+                embed.add_field(name="👤 Owner", value=playlist['owner']['display_name'], inline=True)
+                
+            except:
+                pass  # Just show link if we can't get details
+            
+            embed.add_field(
+                name="🔗 Playlist Link", 
+                value=f"[Open in Spotify]({link})", 
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed)
+        else:
+            # Error getting link
+            embed = discord.Embed(
+                title="❌ Error",
+                description=link,
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+            
+    except Exception as e:
+        error_embed = discord.Embed(
+            title="❌ Error",
+            description=f"An error occurred: {str(e)[:200]}",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=error_embed)
+
+@bot.tree.command(name="spotifyauth", description="Get Spotify authentication URL if needed")
+async def spotifyauth(interaction: discord.Interaction):
+    """Get authentication URL"""
+    await interaction.response.defer(ephemeral=True)  # Only visible to user
+    
+    try:
+        auth_url = spotify.auth_manager.get_authorize_url()
+        
+        embed = discord.Embed(
+            title="🔐 Spotify Authentication",
+            description="If you're getting authentication errors, click the link below:",
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(
+            name="🔗 Authentication Link", 
+            value=f"[Click here to authenticate]({auth_url})", 
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📝 After Authorizing",
+            value="1. You'll be redirected to a page\n2. Copy the ENTIRE URL from your browser\n3. Run the authentication script or contact bot owner",
+            inline=False
+        )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        error_embed = discord.Embed(
+            title="❌ Error",
+            description=f"Could not get auth URL: {str(e)[:200]}",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Handle prefix command errors (for any ! commands)"""
+    if isinstance(error, commands.CommandNotFound):
+        # Suggest using slash commands
+        embed = discord.Embed(
+            title="⚠️ Use Slash Commands",
+            description="This bot uses **slash commands** (/). Type `/` to see available commands.",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="Available Commands", 
+                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/spotifylink` - Get playlist link",
+                       inline=False)
+        await ctx.send(embed=embed, delete_after=15)
+
+if __name__ == "__main__":
+    if not TOKEN:
+        print("❌ ERROR: No Discord token found in .env file")
+        exit(1)
+    
+    print("🚀 Starting Spotify Discord Bot...")
+    print("📋 Available slash commands:")
+    print("   /addsong <song> [artist]")
+    print("   /deletesong <song> [artist]") 
+    print("   /spotifylink")
+    print("   /spotifyauth")
+    
+    bot.run(TOKEN)
