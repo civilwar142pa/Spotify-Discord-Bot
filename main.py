@@ -7,9 +7,19 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
 
-load_dotenv()
+# Try to load .env for local development, but don't fail if it doesn't exist
+try:
+    load_dotenv()
+    print("✅ Loaded .env file (local development)")
+except Exception as e:
+    print(f"ℹ️  No .env file found: {e} (production mode)")
 
 TOKEN = os.getenv('DISCORD_TOKEN')
+
+if not TOKEN:
+    print("❌ ERROR: DISCORD_TOKEN environment variable is not set!")
+    print("Please set it in Render dashboard → Environment")
+    exit(1)
 
 # Intents setup
 intents = discord.Intents.default()
@@ -17,7 +27,89 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Spotify client with better error handling
 class SpotifyClient:
+    def __init__(self):
+        # Get environment variables
+        self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
+        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
+        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI')
+        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
+        
+        print("Checking Spotify credentials...")
+        print(f"Client ID: {'Present' if self.client_id else 'MISSING'}")
+        print(f"Client Secret: {'Present' if self.client_secret else 'MISSING'}")
+        print(f"Redirect URI: {'Present' if self.redirect_uri else 'MISSING'}")
+        print(f"Playlist ID: {'Present' if self.playlist_id else 'MISSING'}")
+        
+        # Check for missing variables
+        missing_vars = []
+        if not self.client_id:
+            missing_vars.append("SPOTIFY_CLIENT_ID")
+        if not self.client_secret:
+            missing_vars.append("SPOTIFY_CLIENT_SECRET")
+        if not self.redirect_uri:
+            missing_vars.append("SPOTIFY_REDIRECT_URI")
+        if not self.playlist_id:
+            missing_vars.append("SPOTIFY_PLAYLIST_ID")
+        
+        if missing_vars:
+            error_msg = f"❌ Missing Spotify environment variables: {', '.join(missing_vars)}"
+            print(error_msg)
+            print("\nPlease add these to Render dashboard → Environment")
+            raise ValueError(error_msg)
+        
+        # Check for token cache in environment variable (for Render)
+        token_json = os.getenv('SPOTIFY_TOKEN_CACHE')
+        cache_path = '/tmp/.spotify_cache'  # Use /tmp on Render
+        
+        if token_json:
+            try:
+                import json
+                print("📥 Found SPOTIFY_TOKEN_CACHE in environment")
+                token_info = json.loads(token_json)
+                # Write to cache file
+                with open(cache_path, 'w') as f:
+                    json.dump(token_info, f)
+                print(f"✅ Saved token to {cache_path}")
+            except Exception as e:
+                print(f"⚠️ Error loading token from env: {e}")
+        else:
+            print("ℹ️ No SPOTIFY_TOKEN_CACHE in environment")
+        
+        # Initialize Spotify
+        self.auth_manager = SpotifyOAuth(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            redirect_uri=self.redirect_uri,
+            scope='playlist-modify-public playlist-modify-private',
+            cache_path=cache_path,
+            open_browser=False
+        )
+        
+        # Try to get cached token
+        token_info = self.auth_manager.get_cached_token()
+        if token_info:
+            print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'unknown')})")
+        else:
+            print("⚠️ No cached token found. Authentication required.")
+            print("To authenticate:")
+            print("1. Run locally: python authenticate_spotify.py")
+            print("2. Copy the JSON output")
+            print("3. Add as SPOTIFY_TOKEN_CACHE in Render")
+            print(f"Or use this auth URL: {self.auth_manager.get_authorize_url()}")
+        
+        self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
+        
+        # Test authentication
+        try:
+            user = self.sp.current_user()
+            print(f"✅ Spotify authenticated as: {user.get('display_name', user['id'])}")
+        except Exception as e:
+            print(f"⚠️ Spotify auth issue: {e}")
+            print("First API call might trigger authentication flow")
+
+
     def __init__(self):
         load_dotenv()
         
