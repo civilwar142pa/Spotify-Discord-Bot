@@ -1,5 +1,5 @@
 services:
-  - type: web
+  - type: web  # Changed from web to worker for Discord bot
     name: spotify-discord-bot
     env: python
     buildCommand: pip install -r requirements.txt
@@ -14,4 +14,6 @@ services:
       - key: SPOTIFY_REDIRECT_URI
         sync: false
       - key: SPOTIFY_PLAYLIST_ID
+        sync: false
+      - key: SPOTIFY_TOKEN_CACHE
         sync: false

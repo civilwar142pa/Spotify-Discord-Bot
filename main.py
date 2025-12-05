@@ -160,6 +160,17 @@ class SpotifyClient:
 # Initialize Spotify client
 spotify = SpotifyClient()
 
+from flask import Flask
+app = Flask(_name_)
+
+@app.route('/')
+def health_check():
+    return "Bot is running", 200
+
+#Run Flask in a thread
+import threading
+threading.Thread(target=lambda: app.run(host='0,0,0,0', port = 8080)).start()
+
 @bot.event
 async def on_ready():
     print(f'✅ {bot.user} has connected to Discord!')
