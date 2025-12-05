@@ -17,11 +17,22 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Spotify client
 class SpotifyClient:
     def __init__(self):
         load_dotenv()
         
+        token_json = os.getenv('SPOTIFY_TOKEN_CACHE')
+        if token_json:
+            try:
+                import json
+                token_info = json.loads(token_json)
+                #Write to cache file
+                with open(cache_path, 'w') as f:
+                    json.dump(token_info, f)
+                print ("Loaded token from environment variable")
+            except Exception as e:
+                print(f"Error loading token from env: {e}")
+
         self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
         self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
         self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI')
@@ -30,14 +41,25 @@ class SpotifyClient:
         if not all([self.client_id, self.client_secret, self.redirect_uri, self.playlist_id]):
             raise ValueError("❌ Missing Spotify credentials in .env file!")
         
-        # Initialize Spotify
+        # For Render deployment, use cache file or environment variable for token
         self.auth_manager = SpotifyOAuth(
             client_id=self.client_id,
             client_secret=self.client_secret,
             redirect_uri=self.redirect_uri,
             scope='playlist-modify-public playlist-modify-private',
-            cache_path='.spotify_cache'
+            cache_path='/tmp/.spotify_cache',  # Use /tmp for Render
+            open_browser=False  # Important for server
         )
+        
+        # Try to get cached token first
+        token_info = self.auth_manager.get_cached_token()
+        
+        if not token_info:
+            print("⚠️ No cached token found. You need to authenticate manually.")
+            print(f"🔗 Auth URL: {self.auth_manager.get_authorize_url()}")
+            # For initial setup, you'll need to run authenticate_spotify.py locally
+            # and copy the .spotify_cache file content to RENDER environment variable
+            raise Exception("Spotify authentication required. Run authenticate_spotify.py locally first.")
         
         self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         
