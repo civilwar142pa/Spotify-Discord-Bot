@@ -86,21 +86,21 @@ class SpotifyClient:
             scope='playlist-modify-public playlist-modify-private',
             cache_path=cache_path,
             open_browser=False,
-            show_dialog=False  # Add this line - don't show dialog on Render
+            show_dialog=False
         )
 
-        # Check if we have a cached token
+        # check for cached token
         token_info = self.auth_manager.get_cached_token()
         if token_info:
-            print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
+            print(f"Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         else:
-            print("❌ No cached token found.")
-            print("💡 You need to provide a token via SPOTIFY_TOKEN_CACHE environment variable.")
+            print("No cached token found.")
+            print("You need to provide a token via SPOTIFY_TOKEN_CACHE environment variable")
             print("Run locally: python authenticate_spotify.py")
-            print("Then copy the JSON output to Render as SPOTIFY_TOKEN_CACHE")
-            # Create Spotify client without auth for now
-            self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
+            print("Then copy the JSON output to Render to SPOTIFY_TOKEN_CACHE")
+            # DO NOT create spotify client
+            self.sp = None
         
         # Test connection
         try:
