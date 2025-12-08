@@ -1,5 +1,5 @@
 services:
-  - type: web  # Changed from web to worker for Discord bot
+  - type: web
     name: spotify-discord-bot
     env: python
     buildCommand: pip install -r requirements.txt
@@ -13,7 +13,10 @@ services:
         sync: false
       - key: SPOTIFY_REDIRECT_URI
         sync: false
+        value: https://your-app-name.onrender.com/callback  # Add this line!
       - key: SPOTIFY_PLAYLIST_ID
         sync: false
       - key: SPOTIFY_TOKEN_CACHE
         sync: false
+    healthCheckPath: /health
+    autoDeploy: true
