@@ -2,24 +2,25 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import os
-from dotenv import load_dotenv
+import sys
+import json
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
+from flask import Flask
+import threading
 
-# Try to load .env for local development, but don't fail if it doesn't exist
-try:
-    load_dotenv()
-    print("✅ Loaded .env file (local development)")
-except Exception as e:
-    print(f"ℹ️  No .env file found: {e} (production mode)")
+print("=" * 50)
+print("🚀 Starting Spotify Discord Bot on Render")
+print("=" * 50)
 
+# Get Discord token from environment
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 if not TOKEN:
     print("❌ ERROR: DISCORD_TOKEN environment variable is not set!")
-    print("Please set it in Render dashboard → Environment")
-    exit(1)
+    print("Please add it in Render dashboard → Environment")
+    sys.exit(1)
 
 # Intents setup
 intents = discord.Intents.default()
@@ -27,20 +28,21 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Spotify client with better error handling
 class SpotifyClient:
     def __init__(self):
+        print("\n🔧 Initializing Spotify Client...")
+        
         # Get environment variables
         self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
         self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
-        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI')
+        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8888/callback')
         self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
         
-        print("Checking Spotify credentials...")
-        print(f"Client ID: {'Present' if self.client_id else 'MISSING'}")
-        print(f"Client Secret: {'Present' if self.client_secret else 'MISSING'}")
-        print(f"Redirect URI: {'Present' if self.redirect_uri else 'MISSING'}")
-        print(f"Playlist ID: {'Present' if self.playlist_id else 'MISSING'}")
+        # Debug: Show what we found
+        print(f"Client ID: {'✅ Present' if self.client_id else '❌ MISSING'}")
+        print(f"Client Secret: {'✅ Present' if self.client_secret else '❌ MISSING'}")
+        print(f"Redirect URI: {self.redirect_uri}")
+        print(f"Playlist ID: {'✅ Present' if self.playlist_id else '❌ MISSING'}")
         
         # Check for missing variables
         missing_vars = []
@@ -48,36 +50,35 @@ class SpotifyClient:
             missing_vars.append("SPOTIFY_CLIENT_ID")
         if not self.client_secret:
             missing_vars.append("SPOTIFY_CLIENT_SECRET")
-        if not self.redirect_uri:
-            missing_vars.append("SPOTIFY_REDIRECT_URI")
         if not self.playlist_id:
             missing_vars.append("SPOTIFY_PLAYLIST_ID")
         
         if missing_vars:
             error_msg = f"❌ Missing Spotify environment variables: {', '.join(missing_vars)}"
             print(error_msg)
-            print("\nPlease add these to Render dashboard → Environment")
+            print("\n📝 Add these in Render dashboard → Environment")
+            for var in missing_vars:
+                print(f"   - {var}")
             raise ValueError(error_msg)
         
-        # Check for token cache in environment variable (for Render)
+        # Handle token cache for Render
+        cache_path = '/tmp/.spotify_cache'  # Use /tmp directory on Render
         token_json = os.getenv('SPOTIFY_TOKEN_CACHE')
-        cache_path = '/tmp/.spotify_cache'  # Use /tmp on Render
         
         if token_json:
             try:
-                import json
-                print("📥 Found SPOTIFY_TOKEN_CACHE in environment")
+                print("📥 Loading token from SPOTIFY_TOKEN_CACHE environment variable")
+                # Parse and save token to file
                 token_info = json.loads(token_json)
-                # Write to cache file
                 with open(cache_path, 'w') as f:
                     json.dump(token_info, f)
-                print(f"✅ Saved token to {cache_path}")
+                print(f"✅ Token saved to {cache_path}")
             except Exception as e:
-                print(f"⚠️ Error loading token from env: {e}")
+                print(f"⚠️ Could not write token cache: {e}")
         else:
-            print("ℹ️ No SPOTIFY_TOKEN_CACHE in environment")
+            print("ℹ️ No SPOTIFY_TOKEN_CACHE found in environment")
         
-        # Initialize Spotify
+        # Initialize Spotify OAuth
         self.auth_manager = SpotifyOAuth(
             client_id=self.client_id,
             client_secret=self.client_secret,
@@ -87,81 +88,27 @@ class SpotifyClient:
             open_browser=False
         )
         
-        # Try to get cached token
+        # Check if we have a cached token
         token_info = self.auth_manager.get_cached_token()
         if token_info:
-            print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'unknown')})")
+            print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
         else:
             print("⚠️ No cached token found. Authentication required.")
-            print("To authenticate:")
+            print("To fix this:")
             print("1. Run locally: python authenticate_spotify.py")
-            print("2. Copy the JSON output")
-            print("3. Add as SPOTIFY_TOKEN_CACHE in Render")
-            print(f"Or use this auth URL: {self.auth_manager.get_authorize_url()}")
+            print("2. Copy the JSON output from .spotify_cache")
+            print("3. Add as SPOTIFY_TOKEN_CACHE in Render environment variables")
+            # Don't raise exception yet - let it try to authenticate on first API call
         
         self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         
-        # Test authentication
+        # Test connection
         try:
             user = self.sp.current_user()
-            print(f"✅ Spotify authenticated as: {user.get('display_name', user['id'])}")
+            print(f"✅ Connected to Spotify as: {user.get('display_name', user['id'])}")
         except Exception as e:
-            print(f"⚠️ Spotify auth issue: {e}")
-            print("First API call might trigger authentication flow")
-
-
-    def __init__(self):
-        load_dotenv()
-        
-        token_json = os.getenv('SPOTIFY_TOKEN_CACHE')
-        if token_json:
-            try:
-                import json
-                token_info = json.loads(token_json)
-                #Write to cache file
-                with open(cache_path, 'w') as f:
-                    json.dump(token_info, f)
-                print ("Loaded token from environment variable")
-            except Exception as e:
-                print(f"Error loading token from env: {e}")
-
-        self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
-        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
-        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI')
-        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
-        
-        if not all([self.client_id, self.client_secret, self.redirect_uri, self.playlist_id]):
-            raise ValueError("❌ Missing Spotify credentials in .env file!")
-        
-        # For Render deployment, use cache file or environment variable for token
-        self.auth_manager = SpotifyOAuth(
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-            redirect_uri=self.redirect_uri,
-            scope='playlist-modify-public playlist-modify-private',
-            cache_path='/tmp/.spotify_cache',  # Use /tmp for Render
-            open_browser=False  # Important for server
-        )
-        
-        # Try to get cached token first
-        token_info = self.auth_manager.get_cached_token()
-        
-        if not token_info:
-            print("⚠️ No cached token found. You need to authenticate manually.")
-            print(f"🔗 Auth URL: {self.auth_manager.get_authorize_url()}")
-            # For initial setup, you'll need to run authenticate_spotify.py locally
-            # and copy the .spotify_cache file content to RENDER environment variable
-            raise Exception("Spotify authentication required. Run authenticate_spotify.py locally first.")
-        
-        self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
-        
-        # Test authentication
-        try:
-            user = self.sp.current_user()
-            print(f"✅ Spotify authenticated as: {user.get('display_name', user['id'])}")
-        except Exception as e:
-            print(f"⚠️  Spotify auth issue: {e}")
-            print("⚠️  First API call will trigger authentication")
+            print(f"⚠️ Spotify connection test failed: {e}")
+            print("This might be okay - token might need refresh on first API call")
     
     def search_and_add_top_result(self, song_query, artist_query=None):
         """Search for a song and add the top result to playlist"""
@@ -174,7 +121,7 @@ class SpotifyClient:
             
             print(f"🔍 Searching: {search_query}")
             
-            # Search for the song (get top 5 to show options)
+            # Search for the song
             results = self.sp.search(q=search_query, type='track', limit=5)
             
             if not results['tracks']['items']:
@@ -250,27 +197,68 @@ class SpotifyClient:
             return f"Error: {e}"
 
 # Initialize Spotify client
-spotify = SpotifyClient()
+try:
+    spotify = SpotifyClient()
+    print("✅ Spotify client initialized successfully!")
+except Exception as e:
+    print(f"❌ Failed to initialize Spotify client: {e}")
+    spotify = None
 
-from flask import Flask
-app = Flask(_name_)
+# Create Flask app for health checks (required for Render web service)
+app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "Bot is running", 200
+    return "✅ Spotify Discord Bot is running!", 200
 
-#Run Flask in a thread
-import threading
-threading.Thread(target=lambda: app.run(host='0,0,0,0', port = 8080)).start()
+@app.route('/health')
+def health():
+    return {"status": "healthy", "service": "spotify-discord-bot"}, 200
+
+# route for callback URI
+@app.route('/callback')
+def spotify_callback():
+    """Handle Spotify OAuth callback"""
+    try:
+        code = request.args.get('code')
+        error = request.args.get('error')
+        
+        if error:
+            return f"❌ Spotify authorization failed: {error}", 400
+        
+        if code:
+            print(f"✅ Received Spotify authorization code")
+            # The SpotifyOAuth instance in your main code should handle this automatically
+            return "✅ Spotify authorization successful! You can close this window. The bot should now have access.", 200
+        else:
+            return "⚠️ No authorization code received", 400
+            
+    except Exception as e:
+        print(f"❌ Error in callback: {e}")
+        return f"Error: {str(e)}", 500
+
+# Run Flask in a separate thread
+def run_flask():
+    app.run(host='0.0.0.0', port=8080, debug=False)
+
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+print("✅ Flask health check server started on port 8080")
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} has connected to Discord!')
+    print(f'\n✅ {bot.user} has connected to Discord!')
+    print(f'✅ Bot ID: {bot.user.id}')
     
     # Sync slash commands
     try:
         synced = await bot.tree.sync()
         print(f'✅ Synced {len(synced)} slash command(s)')
+        
+        # List available commands
+        print("\n📋 Available slash commands:")
+        for cmd in synced:
+            print(f"   /{cmd.name} - {cmd.description}")
     except Exception as e:
         print(f'❌ Error syncing commands: {e}')
 
@@ -282,6 +270,10 @@ async def on_ready():
 )
 async def addsong(interaction: discord.Interaction, song: str, artist: str = None):
     """Add the top search result to the playlist"""
+    if spotify is None:
+        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
+        return
+    
     # Defer response since Spotify API might take time
     await interaction.response.defer()
     
@@ -347,6 +339,10 @@ async def addsong(interaction: discord.Interaction, song: str, artist: str = Non
 )
 async def deletesong(interaction: discord.Interaction, song: str, artist: str = None):
     """Remove a song from the playlist"""
+    if spotify is None:
+        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
+        return
+    
     await interaction.response.defer()
     
     try:
@@ -390,6 +386,10 @@ async def deletesong(interaction: discord.Interaction, song: str, artist: str = 
 @bot.tree.command(name="spotifylink", description="Get the link to the Spotify playlist")
 async def spotifylink(interaction: discord.Interaction):
     """Get the playlist link"""
+    if spotify is None:
+        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
+        return
+    
     await interaction.response.defer()
     
     try:
@@ -451,6 +451,10 @@ async def spotifyauth(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)  # Only visible to user
     
     try:
+        if spotify is None:
+            await interaction.followup.send("❌ Spotify client is not initialized.", ephemeral=True)
+            return
+            
         auth_url = spotify.auth_manager.get_authorize_url()
         
         embed = discord.Embed(
@@ -481,6 +485,40 @@ async def spotifyauth(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=error_embed, ephemeral=True)
 
+@bot.tree.command(name="botstatus", description="Check bot status")
+async def botstatus(interaction: discord.Interaction):
+    """Check bot status"""
+    await interaction.response.defer(ephemeral=True)
+    
+    embed = discord.Embed(
+        title="🤖 Bot Status",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    
+    # Bot info
+    embed.add_field(name="Bot Name", value=bot.user.name, inline=True)
+    embed.add_field(name="Bot ID", value=bot.user.id, inline=True)
+    embed.add_field(name="Discord API", value="✅ Connected", inline=True)
+    
+    # Spotify status
+    spotify_status = "✅ Connected" if spotify else "❌ Not connected"
+    embed.add_field(name="Spotify API", value=spotify_status, inline=True)
+    
+    # Environment check
+    env_vars = ['DISCORD_TOKEN', 'SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_SECRET', 'SPOTIFY_PLAYLIST_ID']
+    missing = [var for var in env_vars if not os.getenv(var)]
+    
+    if missing:
+        embed.add_field(name="Environment", value=f"❌ Missing: {', '.join(missing)}", inline=False)
+    else:
+        embed.add_field(name="Environment", value="✅ All variables set", inline=False)
+    
+    # Uptime (simplified)
+    embed.set_footer(text="Spotify Discord Bot")
+    
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @bot.event
 async def on_command_error(ctx, error):
     """Handle prefix command errors (for any ! commands)"""
@@ -492,20 +530,19 @@ async def on_command_error(ctx, error):
             color=discord.Color.orange()
         )
         embed.add_field(name="Available Commands", 
-                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/spotifylink` - Get playlist link",
+                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/spotifylink` - Get playlist link\n`/botstatus` - Check bot status",
                        inline=False)
         await ctx.send(embed=embed, delete_after=15)
 
 if __name__ == "__main__":
-    if not TOKEN:
-        print("❌ ERROR: No Discord token found in .env file")
-        exit(1)
+    print("\n" + "=" * 50)
+    print("📋 Starting bot with configuration:")
+    print(f"✅ Discord Bot: {'Ready' if TOKEN else 'Missing token'}")
+    print(f"✅ Flask Server: Running on port 8080")
+    print("=" * 50 + "\n")
     
-    print("🚀 Starting Spotify Discord Bot...")
-    print("📋 Available slash commands:")
-    print("   /addsong <song> [artist]")
-    print("   /deletesong <song> [artist]") 
-    print("   /spotifylink")
-    print("   /spotifyauth")
-    
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        print(f"❌ Failed to start bot: {e}")
+        sys.exit(1)
