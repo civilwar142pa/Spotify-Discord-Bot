@@ -62,7 +62,7 @@ class SpotifyClient:
             raise ValueError(error_msg)
         
         # Handle token cache for Render
-        cache_path = '/tmp/.spotify_cache'  # Use /tmp directory on Render
+        cache_path = '/tmp/.spotify_cache'
         token_json = os.getenv('SPOTIFY_TOKEN_CACHE')
         
         if token_json:
@@ -89,18 +89,18 @@ class SpotifyClient:
             show_dialog=False
         )
 
-        # check for cached token
+        # Check if we have a cached token
         token_info = self.auth_manager.get_cached_token()
         if token_info:
-            print(f"Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
+            print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         else:
-            print("No cached token found.")
-            print("You need to provide a token via SPOTIFY_TOKEN_CACHE environment variable")
+            print("❌ No cached token found.")
+            print("💡 You need to provide a token via SPOTIFY_TOKEN_CACHE environment variable.")
             print("Run locally: python authenticate_spotify.py")
-            print("Then copy the JSON output to Render to SPOTIFY_TOKEN_CACHE")
-            # DO NOT create spotify client
-            self.sp = None
+            print("Then copy the JSON output to Render as SPOTIFY_TOKEN_CACHE")
+            # Create Spotify client without auth for now
+            self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         
         # Test connection
         try:
@@ -215,7 +215,6 @@ def health_check():
 def health():
     return {"status": "healthy", "service": "spotify-discord-bot"}, 200
 
-# route for callback URI
 @app.route('/callback')
 def spotify_callback():
     """Handle Spotify OAuth callback"""
@@ -263,6 +262,56 @@ async def on_ready():
         print(f'❌ Error syncing commands: {e}')
 
 # SLASH COMMANDS
+
+@bot.tree.command(name="commands", description="Show all available commands")
+async def show_commands(interaction: discord.Interaction):
+    """Show all available commands"""
+    embed = discord.Embed(
+        title="🤖 Spotify Discord Bot Commands",
+        description="Here are all the commands you can use:",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="🎵 Music Commands",
+        value=(
+            "**/addsong** `<song>` `<artist(optional)>`\n"
+            "Add a song to the Spotify playlist\n\n"
+            "**/deletesong** `<song>` `<artist(optional)>`\n"
+            "Remove a song from the playlist\n\n"
+            "**/spotifylink**\n"
+            "Get the link to the Spotify playlist"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🔧 Utility Commands",
+        value=(
+            "**/botstatus**\n"
+            "Check bot and Spotify connection status\n\n"
+            "**/spotifyauth**\n"
+            "Get Spotify authentication URL if needed\n\n"
+            "**/commands**\n"
+            "Show this help message"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="💡 Usage Tips",
+        value=(
+            "• Type `/` to see all commands\n"
+            "• Most commands take a few seconds to process\n"
+            "• Use specific song/artist names for best results"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="Made with ❤️ using Discord.py and Spotipy")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
 @bot.tree.command(name="addsong", description="Add a song to the Spotify playlist")
 @app_commands.describe(
     song="Name of the song",
@@ -282,6 +331,9 @@ async def addsong(interaction: discord.Interaction, song: str, artist: str = Non
         track, result = spotify.search_and_add_top_result(song, artist)
         
         if track:
+            # Get playlist link
+            playlist_link = spotify.get_playlist_link()
+            
             # Create a beautiful embed
             embed = discord.Embed(
                 title="✅ Song Added to Playlist",
@@ -303,10 +355,16 @@ async def addsong(interaction: discord.Interaction, song: str, artist: str = Non
             if track['album']['images']:
                 embed.set_thumbnail(url=track['album']['images'][0]['url'])
             
-            # Add Spotify link
+            # Add Spotify links section
+            links_text = f"[Open Song]({track['external_urls']['spotify']})"
+            
+            # Add playlist link if available
+            if playlist_link and "https://open.spotify.com" in playlist_link:
+                links_text += f"\n[Open Playlist]({playlist_link})"
+            
             embed.add_field(
-                name="🔗 Listen on Spotify", 
-                value=f"[Open Song]({track['external_urls']['spotify']})",
+                name="🔗 Spotify Links",
+                value=links_text,
                 inline=False
             )
             
@@ -514,7 +572,22 @@ async def botstatus(interaction: discord.Interaction):
     else:
         embed.add_field(name="Environment", value="✅ All variables set", inline=False)
     
-    # Uptime (simplified)
+    # Available commands
+    commands_list = [
+        "/addsong - Add a song",
+        "/deletesong - Remove a song",
+        "/spotifylink - Get playlist link",
+        "/botstatus - Check status",
+        "/spotifyauth - Get auth URL",
+        "/commands - Show all commands"
+    ]
+    
+    embed.add_field(
+        name="Available Commands",
+        value="\n".join(commands_list),
+        inline=False
+    )
+    
     embed.set_footer(text="Spotify Discord Bot")
     
     await interaction.followup.send(embed=embed, ephemeral=True)
@@ -530,7 +603,7 @@ async def on_command_error(ctx, error):
             color=discord.Color.orange()
         )
         embed.add_field(name="Available Commands", 
-                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/spotifylink` - Get playlist link\n`/botstatus` - Check bot status",
+                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/spotifylink` - Get playlist link\n`/botstatus` - Check bot status\n`/spotifyauth` - Get auth URL\n`/commands` - Show all commands",
                        inline=False)
         await ctx.send(embed=embed, delete_after=15)
 
