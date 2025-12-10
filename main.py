@@ -391,11 +391,11 @@ async def addsong(interaction: discord.Interaction, query: str):
     song = query
     artist = None
     
-    # Use rsplit to handle cases where "by" is in the song title (e.g., "Stand by Me")
+    # Handle "Song by Artist" format (case-insensitive)
     if ' by ' in query.lower():
-        parts = query.rsplit(' by ', 1)
-        song = parts[0].strip()
-        artist = parts[1].strip()
+        split_idx = query.lower().rfind(' by ')
+        song = query[:split_idx].strip()
+        artist = query[split_idx + 4:].strip()
     
     try:
         # Search and add song
@@ -481,11 +481,11 @@ async def deletesong(interaction: discord.Interaction, query: str):
     song = query
     artist = None
     
-    # Use rsplit to handle cases where "by" is in the song title
+    # Handle "Song by Artist" format (case-insensitive)
     if ' by ' in query.lower():
-        parts = query.rsplit(' by ', 1)
-        song = parts[0].strip()
-        artist = parts[1].strip()
+        split_idx = query.lower().rfind(' by ')
+        song = query[:split_idx].strip()
+        artist = query[split_idx + 4:].strip()
 
     try:
         track, result = spotify.remove_song(song, artist)
