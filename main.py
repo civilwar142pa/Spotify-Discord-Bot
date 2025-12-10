@@ -329,10 +329,9 @@ async def show_commands(interaction: discord.Interaction):
 
 @bot.tree.command(name="addsong", description="Add a song to the Spotify playlist")
 @app_commands.describe(
-    song="Name of the song",
-    artist="Artist name (optional)"
+    query="Song name, optionally with artist (e.g., 'Bohemian Rhapsody by Queen')"
 )
-async def addsong(interaction: discord.Interaction, song: str, artist: str = None):
+async def addsong(interaction: discord.Interaction, query: str):
     """Add the top search result to the playlist"""
     if spotify is None:
         await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
@@ -340,6 +339,16 @@ async def addsong(interaction: discord.Interaction, song: str, artist: str = Non
     
     # Defer response since Spotify API might take time
     await interaction.response.defer()
+
+    # Parse the query to separate song and artist
+    song = query
+    artist = None
+    
+    # Use rsplit to handle cases where "by" is in the song title (e.g., "Stand by Me")
+    if ' by ' in query.lower():
+        parts = query.rsplit(' by ', 1)
+        song = parts[0].strip()
+        artist = parts[1].strip()
     
     try:
         # Search and add song
