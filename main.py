@@ -304,7 +304,9 @@ async def show_commands(interaction: discord.Interaction):
             "**/deletesong** `<song>` `<artist(optional)>`\n"
             "Remove a song from the playlist\n\n"
             "**/spotifylink**\n"
-            "Get the link to the Spotify playlist"
+            "Get the link to the Spotify playlist\n\n"
+            "**/link**\n"
+            "Alias for /spotifylink"
         ),
         inline=False
     )
@@ -487,8 +489,8 @@ async def deletesong(interaction: discord.Interaction, query: str):
         )
         await interaction.followup.send(embed=error_embed)
 
-@bot.tree.command(name="spotifylink", description="Get the link to the Spotify playlist")
-async def spotifylink(interaction: discord.Interaction):
+@bot.tree.command(name="link", description="Get the link to the Spotify playlist")
+async def link(interaction: discord.Interaction):
     """Get the playlist link"""
     if spotify is None:
         await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
@@ -622,7 +624,7 @@ async def botstatus(interaction: discord.Interaction):
     commands_list = [
         "/addsong - Add a song",
         "/deletesong - Remove a song",
-        "/spotifylink - Get playlist link",
+        "/link - Get playlist link",
         "/botstatus - Check status",
         "/spotifyauth - Get auth URL",
         "/commands - Show all commands"
@@ -649,7 +651,7 @@ async def on_command_error(ctx, error):
             color=discord.Color.orange()
         )
         embed.add_field(name="Available Commands", 
-                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/spotifylink` - Get playlist link\n`/botstatus` - Check bot status\n`/spotifyauth` - Get auth URL\n`/commands` - Show all commands",
+                       value="`/addsong` - Add a song\n`/deletesong` - Remove a song\n`/link` - Get playlist link\n`/botstatus` - Check bot status\n`/spotifyauth` - Get auth URL\n`/commands` - Show all commands",
                        inline=False)
         await ctx.send(embed=embed, delete_after=15)
 
