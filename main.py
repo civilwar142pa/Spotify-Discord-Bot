@@ -132,19 +132,20 @@ class SpotifyClient:
         if token_info:
             print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
+            
+            # Test connection
+            try:
+                user = self.sp.current_user()
+                print(f"✅ Connected to Spotify as: {user.get('display_name', user['id'])}")
+            except Exception as e:
+                print(f"⚠️ Spotify connection test failed: {e}")
+                print("This might be okay - token might need refresh on first API call")
         else:
             print("❌ No cached token found.")
             print("💡 Ensure SPOTIFY_TOKEN_CACHE is set for initial migration, or MONGODB_URI is correct.")
+            print("⚠️ Bot will require authentication via /spotifyauth command")
             # Create Spotify client without auth for now
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
-        
-        # Test connection
-        try:
-            user = self.sp.current_user()
-            print(f"✅ Connected to Spotify as: {user.get('display_name', user['id'])}")
-        except Exception as e:
-            print(f"⚠️ Spotify connection test failed: {e}")
-            print("This might be okay - token might need refresh on first API call")
     
     def _refresh_token(self):
         """Force refresh the Spotify token"""
@@ -212,6 +213,9 @@ class SpotifyClient:
                     continue
                 print(f"❌ Spotify error: {e}")
                 return None, f"Spotify error: {e}"
+            except EOFError:
+                print("❌ Authorization required (EOF error)")
+                return None, "❌ Bot is not authenticated. Please run `/spotifyauth` first."
             except Exception as e:
                 print(f"❌ Error: {e}")
                 return None, f"Error: {e}"
@@ -270,6 +274,9 @@ class SpotifyClient:
                     continue
                 print(f"❌ Spotify error during removal: {e}")
                 return None, f"A Spotify API error occurred: {e.msg}"
+            except EOFError:
+                print("❌ Authorization required (EOF error)")
+                return None, "❌ Bot is not authenticated. Please run `/spotifyauth` first."
             except Exception as e:
                 print(f"❌ Error removing song: {e}")
                 return None, f"Error: {e}"
@@ -289,6 +296,8 @@ class SpotifyClient:
                     continue
                 print(f"❌ Error getting playlist link: {e}")
                 return f"Error: {e}"
+            except EOFError:
+                return "❌ Bot is not authenticated. Please run `/spotifyauth` first."
             except Exception as e:
                 print(f"❌ Error getting playlist link: {e}")
                 return f"Error: {e}"
