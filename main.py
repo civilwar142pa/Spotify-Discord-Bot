@@ -162,38 +162,42 @@ class SpotifyClient:
     def remove_song(self, song_query, artist_query=None):
         """Remove a song from the playlist by searching"""
         try:
-            # Build search query for removal
-            search_text = song_query
+            # Build a precise search query
+            search_query = song_query
             if artist_query:
-                search_text += f" {artist_query}"
-            
-            # Get current playlist tracks
-            playlist = self.sp.playlist(self.playlist_id)
-            tracks = playlist['tracks']['items']
-            
-            print(f"🔍 Searching playlist for: {search_text}")
-            
-            # Search through playlist tracks
-            for item in tracks:
-                track = item['track']
-                track_name = track['name'].lower()
-                artist_names = ' '.join([a['name'].lower() for a in track['artists']])
-                
-                # Check if query matches track name or artist
-                if (search_text.lower() in track_name or 
-                    search_text.lower() in artist_names or
-                    (artist_query and artist_query.lower() in artist_names)):
-                    
-                    # Remove the track
-                    self.sp.playlist_remove_all_occurrences_of_items(
-                        self.playlist_id, [track['uri']]
-                    )
-                    
-                    print(f"✅ Removed: {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
-                    return track, f"Removed '{track['name']}' by {', '.join([a['name'] for a in track['artists']])}"
-            
-            return None, "Song not found in playlist."
-            
+                search_query = f"{song_query} artist:{artist_query}"
+
+            print(f"🔍 Searching Spotify for song to remove: {search_query}")
+            results = self.sp.search(q=search_query, type='track', limit=1)
+
+            if not results['tracks']['items']:
+                return None, f"Could not find '{song_query}' on Spotify."
+
+            # Get the top result
+            track = results['tracks']['items'][0]
+            track_uri = track['uri']
+            track_name = track['name']
+            artists = ', '.join([a['name'] for a in track['artists']])
+
+            # Check if the song is actually in the playlist before trying to remove
+            current_tracks_response = self.sp.playlist_items(self.playlist_id, fields='items.track.uri')
+            playlist_track_uris = {item['track']['uri'] for item in current_tracks_response['items'] if item['track']}
+
+            if track_uri not in playlist_track_uris:
+                print(f"ℹ️ Song '{track_name}' not found in the playlist.")
+                return None, f"'{track_name}' by {artists} is not in the playlist."
+
+            # Remove the track
+            self.sp.playlist_remove_all_occurrences_of_items(
+                self.playlist_id, [track_uri]
+            )
+
+            print(f"✅ Removed: {track_name} by {artists}")
+            return track, f"Removed '{track_name}' by {artists}"
+
+        except SpotifyException as e:
+            print(f"❌ Spotify error during removal: {e}")
+            return None, f"A Spotify API error occurred: {e.msg}"
         except Exception as e:
             print(f"❌ Error removing song: {e}")
             return None, f"Error: {e}"
