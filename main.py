@@ -11,6 +11,14 @@ from spotipy.exceptions import SpotifyException
 from pymongo import MongoClient
 from flask import Flask, request
 import threading
+import builtins
+
+# Prevent input() from blocking/crashing in non-interactive environments
+def non_blocking_input(prompt=''):
+    print(f"⚠️ BLOCKED INPUT REQUEST: {prompt}")
+    print("❌ Authentication failed and bot tried to prompt for input.")
+    raise EOFError("Non-interactive environment")
+builtins.input = non_blocking_input
 
 print("=" * 50)
 print("🚀 Starting Spotify Discord Bot on Render")
@@ -44,6 +52,7 @@ class MongoDBCacheHandler(CacheHandler):
         
     def get_cached_token(self):
         # Try to get from DB
+        print("🔍 Checking MongoDB for cached token...")
         record = self.collection.find_one({'_id': 'main_token'})
         if record:
             return record['token_info']
@@ -115,6 +124,10 @@ class SpotifyClient:
                 # We will fail loudly later if auth_manager tries to use None
         else:
             print("⚠️ MONGODB_URI not found in environment variables")
+            if os.getenv('SPOTIFY_TOKEN_CACHE'):
+                print("❌ CRITICAL: SPOTIFY_TOKEN_CACHE is set, but MONGODB_URI is missing!")
+                print("   The bot cannot migrate the token if it cannot connect to MongoDB.")
+                print("   Please add MONGODB_URI to your Render environment variables.")
         
         # Initialize Spotify OAuth
         self.auth_manager = SpotifyOAuth(
