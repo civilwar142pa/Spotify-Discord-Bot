@@ -6,7 +6,9 @@ import sys
 import json
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import CacheHandler
 from spotipy.exceptions import SpotifyException
+from pymongo import MongoClient
 from flask import Flask, request
 import threading
 
@@ -27,6 +29,44 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+class MongoDBCacheHandler(CacheHandler):
+    """
+    Custom handler to store Spotify token in MongoDB.
+    Includes a fallback to load from env var for initial migration.
+    """
+    def __init__(self, connection_string):
+        # Parse connection string and connect
+        self.client = MongoClient(connection_string)
+        # Use a specific database and collection
+        self.db = self.client.get_database('spotify_bot')
+        self.collection = self.db.get_collection('tokens')
+        
+    def get_cached_token(self):
+        # Try to get from DB
+        record = self.collection.find_one({'_id': 'main_token'})
+        if record:
+            return record['token_info']
+            
+        # Fallback: Check environment variable (migration helper)
+        env_token = os.getenv('SPOTIFY_TOKEN_CACHE')
+        if env_token:
+            try:
+                print("📥 Migrating token from Env Var to MongoDB...")
+                token_info = json.loads(env_token)
+                self.save_token_to_cache(token_info)
+                return token_info
+            except Exception as e:
+                print(f"⚠️ Migration failed: {e}")
+        return None
+
+    def save_token_to_cache(self, token_info):
+        # Upsert (update or insert) the token
+        self.collection.update_one(
+            {'_id': 'main_token'},
+            {'$set': {'token_info': token_info}},
+            upsert=True
+        )
 
 class SpotifyClient:
     def __init__(self):
@@ -61,22 +101,20 @@ class SpotifyClient:
                 print(f"   - {var}")
             raise ValueError(error_msg)
         
-        # Handle token cache for Render
-        cache_path = '/tmp/.spotify_cache'
-        token_json = os.getenv('SPOTIFY_TOKEN_CACHE')
+        # Initialize MongoDB Cache Handler
+        mongo_uri = os.getenv('MONGODB_URI')
+        cache_handler = None
         
-        if token_json:
+        if mongo_uri:
             try:
-                print("📥 Loading token from SPOTIFY_TOKEN_CACHE environment variable")
-                # Parse and save token to file
-                token_info = json.loads(token_json)
-                with open(cache_path, 'w') as f:
-                    json.dump(token_info, f)
-                print(f"✅ Token saved to {cache_path}")
+                print("🍃 Connecting to MongoDB...")
+                cache_handler = MongoDBCacheHandler(mongo_uri)
+                print("✅ MongoDB Cache Handler initialized")
             except Exception as e:
-                print(f"⚠️ Could not write token cache: {e}")
+                print(f"❌ MongoDB connection failed: {e}")
+                # We will fail loudly later if auth_manager tries to use None
         else:
-            print("ℹ️ No SPOTIFY_TOKEN_CACHE found in environment")
+            print("⚠️ MONGODB_URI not found in environment variables")
         
         # Initialize Spotify OAuth
         self.auth_manager = SpotifyOAuth(
@@ -84,7 +122,7 @@ class SpotifyClient:
             client_secret=self.client_secret,
             redirect_uri=self.redirect_uri,
             scope='playlist-modify-public playlist-modify-private',
-            cache_path=cache_path,
+            cache_handler=cache_handler,
             open_browser=False,
             show_dialog=False
         )
@@ -96,9 +134,7 @@ class SpotifyClient:
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         else:
             print("❌ No cached token found.")
-            print("💡 You need to provide a token via SPOTIFY_TOKEN_CACHE environment variable.")
-            print("Run locally: python authenticate_spotify.py")
-            print("Then copy the JSON output to Render as SPOTIFY_TOKEN_CACHE")
+            print("💡 Ensure SPOTIFY_TOKEN_CACHE is set for initial migration, or MONGODB_URI is correct.")
             # Create Spotify client without auth for now
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         
@@ -116,8 +152,9 @@ class SpotifyClient:
         try:
             token_info = self.auth_manager.get_cached_token()
             if token_info and 'refresh_token' in token_info:
-                self.auth_manager.refresh_access_token(token_info['refresh_token'])
+                new_token = self.auth_manager.refresh_access_token(token_info['refresh_token'])
                 print("✅ Token refreshed successfully")
+                print("✅ New token saved to MongoDB automatically")
             else:
                 print("⚠️ No refresh token found in cache")
         except Exception as e:
