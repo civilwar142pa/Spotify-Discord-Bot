@@ -110,115 +110,151 @@ class SpotifyClient:
             print(f"⚠️ Spotify connection test failed: {e}")
             print("This might be okay - token might need refresh on first API call")
     
+    def _refresh_token(self):
+        """Force refresh the Spotify token"""
+        print("🔄 Forcing token refresh...")
+        try:
+            token_info = self.auth_manager.get_cached_token()
+            if token_info and 'refresh_token' in token_info:
+                self.auth_manager.refresh_access_token(token_info['refresh_token'])
+                print("✅ Token refreshed successfully")
+            else:
+                print("⚠️ No refresh token found in cache")
+        except Exception as e:
+            print(f"❌ Error refreshing token: {e}")
+
     def search_and_add_top_result(self, song_query, artist_query=None):
         """Search for a song and add the top result to playlist"""
-        try:
-            # Build search query
-            if artist_query:
-                search_query = f"{song_query} artist:{artist_query}"
-            else:
-                search_query = song_query
-            
-            print(f"🔍 Searching: {search_query}")
-            
-            # Search for the song
-            results = self.sp.search(q=search_query, type='track', limit=5)
-            
-            if not results['tracks']['items']:
-                return None, "No songs found with that search."
-            
-            # Get the top result
-            track = results['tracks']['items'][0]
-            track_uri = track['uri']
-            track_name = track['name']
-            artists = ', '.join([artist['name'] for artist in track['artists']])
-            
-            # Check for duplicates before adding
-            print("🔍 Checking for duplicates in playlist...")
-            current_tracks = self.sp.playlist_items(self.playlist_id, fields='items.track.uri')
-            track_uris = {item['track']['uri'] for item in current_tracks['items'] if item['track']}
-            
-            if track_uri in track_uris:
-                print(f"⚠️ Duplicate found: {track_name} by {artists}")
-                return track, f"'{track_name}' by {artists} is already in the playlist."
-            
-            # --- End of duplicate check ---
-            
-            print(f"✅ Top result: {track_name} by {artists}")
-            
-            # Add to playlist
-            self.sp.playlist_add_items(self.playlist_id, [track_uri])
-            print(f"✅ Added to playlist: {self.playlist_id}")
-            
-            return track, f"Added '{track_name}' by {artists} to the playlist!"
-            
-        except SpotifyException as e:
-            print(f"❌ Spotify error: {e}")
-            return None, f"Spotify error: {e}"
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            return None, f"Error: {e}"
+        attempts = 0
+        while attempts < 2:
+            try:
+                # Build search query
+                if artist_query:
+                    search_query = f"{song_query} artist:{artist_query}"
+                else:
+                    search_query = song_query
+                
+                print(f"🔍 Searching: {search_query}")
+                
+                # Search for the song
+                results = self.sp.search(q=search_query, type='track', limit=5)
+                
+                if not results['tracks']['items']:
+                    return None, "No songs found with that search."
+                
+                # Get the top result
+                track = results['tracks']['items'][0]
+                track_uri = track['uri']
+                track_name = track['name']
+                artists = ', '.join([artist['name'] for artist in track['artists']])
+                
+                # Check for duplicates before adding
+                print("🔍 Checking for duplicates in playlist...")
+                current_tracks = self.sp.playlist_items(self.playlist_id, fields='items.track.uri')
+                track_uris = {item['track']['uri'] for item in current_tracks['items'] if item['track']}
+                
+                if track_uri in track_uris:
+                    print(f"⚠️ Duplicate found: {track_name} by {artists}")
+                    return track, f"'{track_name}' by {artists} is already in the playlist."
+                
+                # --- End of duplicate check ---
+                
+                print(f"✅ Top result: {track_name} by {artists}")
+                
+                # Add to playlist
+                self.sp.playlist_add_items(self.playlist_id, [track_uri])
+                print(f"✅ Added to playlist: {self.playlist_id}")
+                
+                return track, f"Added '{track_name}' by {artists} to the playlist!"
+                
+            except SpotifyException as e:
+                if e.http_status == 401 and attempts == 0:
+                    print("🔄 Token expired. Refreshing...")
+                    self._refresh_token()
+                    attempts += 1
+                    continue
+                print(f"❌ Spotify error: {e}")
+                return None, f"Spotify error: {e}"
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                return None, f"Error: {e}"
     
     def remove_song(self, song_query, artist_query=None):
-        """Remove a song from the playlist by searching"""
         """Find and remove a song by searching within the playlist."""
-        try:
-            print(f"🔍 Searching playlist for '{song_query}' by '{artist_query or 'any artist'}'")
+        attempts = 0
+        while attempts < 2:
+            try:
+                print(f"🔍 Searching playlist for '{song_query}' by '{artist_query or 'any artist'}'")
 
-            # Fetch all tracks from the playlist, handling pagination
-            all_items = []
-            results = self.sp.playlist_items(self.playlist_id)
-            all_items.extend(results['items'])
-            while results['next']:
-                results = self.sp.next(results)
+                # Fetch all tracks from the playlist, handling pagination
+                all_items = []
+                results = self.sp.playlist_items(self.playlist_id)
                 all_items.extend(results['items'])
+                while results['next']:
+                    results = self.sp.next(results)
+                    all_items.extend(results['items'])
 
-            # Find the first matching track in the playlist
-            track_to_remove = None
-            for item in all_items:
-                if not item or not item.get('track'):
+                # Find the first matching track in the playlist
+                track_to_remove = None
+                for item in all_items:
+                    if not item or not item.get('track'):
+                        continue
+                    
+                    track = item['track']
+                    track_name = track['name'].lower()
+                    artist_names = [a['name'].lower() for a in track['artists']]
+
+                    # Check for a match
+                    song_matches = song_query.lower() in track_name
+                    artist_matches = True  # Assume artist matches if none is provided
+                    if artist_query:
+                        artist_matches = any(artist_query.lower() in name for name in artist_names)
+
+                    if song_matches and artist_matches:
+                        track_to_remove = track
+                        break  # Found our song, stop searching
+
+                if track_to_remove:
+                    track_uri = track_to_remove['uri']
+                    track_name = track_to_remove['name']
+                    artists = ', '.join([a['name'] for a in track_to_remove['artists']])
+                    
+                    self.sp.playlist_remove_all_occurrences_of_items(self.playlist_id, [track_uri])
+                    print(f"✅ Removed: {track_name} by {artists}")
+                    return track_to_remove, f"Removed '{track_name}' by {artists}"
+                
+                return None, f"Could not find a song matching '{song_query}' in the playlist."
+                
+            except SpotifyException as e:
+                if e.http_status == 401 and attempts == 0:
+                    print("🔄 Token expired. Refreshing...")
+                    self._refresh_token()
+                    attempts += 1
                     continue
-                
-                track = item['track']
-                track_name = track['name'].lower()
-                artist_names = [a['name'].lower() for a in track['artists']]
-
-                # Check for a match
-                song_matches = song_query.lower() in track_name
-                artist_matches = True  # Assume artist matches if none is provided
-                if artist_query:
-                    artist_matches = any(artist_query.lower() in name for name in artist_names)
-
-                if song_matches and artist_matches:
-                    track_to_remove = track
-                    break  # Found our song, stop searching
-
-            if track_to_remove:
-                track_uri = track_to_remove['uri']
-                track_name = track_to_remove['name']
-                artists = ', '.join([a['name'] for a in track_to_remove['artists']])
-                
-                self.sp.playlist_remove_all_occurrences_of_items(self.playlist_id, [track_uri])
-                print(f"✅ Removed: {track_name} by {artists}")
-                return track_to_remove, f"Removed '{track_name}' by {artists}"
-            
-            return None, f"Could not find a song matching '{song_query}' in the playlist."
-            
-        except SpotifyException as e:
-            print(f"❌ Spotify error during removal: {e}")
-            return None, f"A Spotify API error occurred: {e.msg}"
-        except Exception as e:
-            print(f"❌ Error removing song: {e}")
-            return None, f"Error: {e}"
+                print(f"❌ Spotify error during removal: {e}")
+                return None, f"A Spotify API error occurred: {e.msg}"
+            except Exception as e:
+                print(f"❌ Error removing song: {e}")
+                return None, f"Error: {e}"
     
     def get_playlist_link(self):
         """Get the public playlist link"""
-        try:
-            playlist = self.sp.playlist(self.playlist_id)
-            return playlist['external_urls']['spotify']
-        except Exception as e:
-            print(f"❌ Error getting playlist link: {e}")
-            return f"Error: {e}"
+        attempts = 0
+        while attempts < 2:
+            try:
+                playlist = self.sp.playlist(self.playlist_id)
+                return playlist['external_urls']['spotify']
+            except SpotifyException as e:
+                if e.http_status == 401 and attempts == 0:
+                    print("🔄 Token expired. Refreshing...")
+                    self._refresh_token()
+                    attempts += 1
+                    continue
+                print(f"❌ Error getting playlist link: {e}")
+                return f"Error: {e}"
+            except Exception as e:
+                print(f"❌ Error getting playlist link: {e}")
+                return f"Error: {e}"
 
 # Initialize Spotify client
 try:
