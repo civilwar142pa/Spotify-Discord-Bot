@@ -133,6 +133,17 @@ class SpotifyClient:
             track_name = track['name']
             artists = ', '.join([artist['name'] for artist in track['artists']])
             
+            # Check for duplicates before adding
+            print("🔍 Checking for duplicates in playlist...")
+            current_tracks = self.sp.playlist_items(self.playlist_id, fields='items.track.uri')
+            track_uris = {item['track']['uri'] for item in current_tracks['items'] if item['track']}
+            
+            if track_uri in track_uris:
+                print(f"⚠️ Duplicate found: {track_name} by {artists}")
+                return track, f"'{track_name}' by {artists} is already in the playlist."
+            
+            # --- End of duplicate check ---
+            
             print(f"✅ Top result: {track_name} by {artists}")
             
             # Add to playlist
@@ -338,8 +349,12 @@ async def addsong(interaction: discord.Interaction, song: str, artist: str = Non
             embed = discord.Embed(
                 title="✅ Song Added to Playlist",
                 color=discord.Color.green(),
-                description=f"**{track['name']}** has been added to the playlist!"
+                description=f"**{track['name']}** has been added!"
             )
+            # Custom message for duplicates
+            if result and "already in the playlist" in result:
+                embed.title = "ℹ️ Song Already in Playlist"
+                embed.description = f"**{track['name']}** is already on the playlist."
             
             # Add fields
             embed.add_field(name="🎵 Song", value=track['name'], inline=True)
