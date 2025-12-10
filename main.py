@@ -161,40 +161,49 @@ class SpotifyClient:
     
     def remove_song(self, song_query, artist_query=None):
         """Remove a song from the playlist by searching"""
+        """Find and remove a song by searching within the playlist."""
         try:
-            # Build a precise search query
-            search_query = song_query
-            if artist_query:
-                search_query = f"{song_query} artist:{artist_query}"
+            print(f"🔍 Searching playlist for '{song_query}' by '{artist_query or 'any artist'}'")
 
-            print(f"🔍 Searching Spotify for song to remove: {search_query}")
-            results = self.sp.search(q=search_query, type='track', limit=1)
+            # Fetch all tracks from the playlist, handling pagination
+            all_items = []
+            results = self.sp.playlist_items(self.playlist_id)
+            all_items.extend(results['items'])
+            while results['next']:
+                results = self.sp.next(results)
+                all_items.extend(results['items'])
 
-            if not results['tracks']['items']:
-                return None, f"Could not find '{song_query}' on Spotify."
+            # Find the first matching track in the playlist
+            track_to_remove = None
+            for item in all_items:
+                if not item or not item.get('track'):
+                    continue
+                
+                track = item['track']
+                track_name = track['name'].lower()
+                artist_names = [a['name'].lower() for a in track['artists']]
 
-            # Get the top result
-            track = results['tracks']['items'][0]
-            track_uri = track['uri']
-            track_name = track['name']
-            artists = ', '.join([a['name'] for a in track['artists']])
+                # Check for a match
+                song_matches = song_query.lower() in track_name
+                artist_matches = True  # Assume artist matches if none is provided
+                if artist_query:
+                    artist_matches = any(artist_query.lower() in name for name in artist_names)
 
-            # Check if the song is actually in the playlist before trying to remove
-            current_tracks_response = self.sp.playlist_items(self.playlist_id, fields='items.track.uri')
-            playlist_track_uris = {item['track']['uri'] for item in current_tracks_response['items'] if item['track']}
+                if song_matches and artist_matches:
+                    track_to_remove = track
+                    break  # Found our song, stop searching
 
-            if track_uri not in playlist_track_uris:
-                print(f"ℹ️ Song '{track_name}' not found in the playlist.")
-                return None, f"'{track_name}' by {artists} is not in the playlist."
-
-            # Remove the track
-            self.sp.playlist_remove_all_occurrences_of_items(
-                self.playlist_id, [track_uri]
-            )
-
-            print(f"✅ Removed: {track_name} by {artists}")
-            return track, f"Removed '{track_name}' by {artists}"
-
+            if track_to_remove:
+                track_uri = track_to_remove['uri']
+                track_name = track_to_remove['name']
+                artists = ', '.join([a['name'] for a in track_to_remove['artists']])
+                
+                self.sp.playlist_remove_all_occurrences_of_items(self.playlist_id, [track_uri])
+                print(f"✅ Removed: {track_name} by {artists}")
+                return track_to_remove, f"Removed '{track_name}' by {artists}"
+            
+            return None, f"Could not find a song matching '{song_query}' in the playlist."
+            
         except SpotifyException as e:
             print(f"❌ Spotify error during removal: {e}")
             return None, f"A Spotify API error occurred: {e.msg}"
@@ -420,17 +429,26 @@ async def addsong(interaction: discord.Interaction, query: str):
 
 @bot.tree.command(name="deletesong", description="Remove a song from the playlist")
 @app_commands.describe(
-    song="Name of the song to remove",
-    artist="Artist name (optional)"
+    query="Song name, optionally with artist (e.g., 'Bohemian Rhapsody by Queen')"
 )
-async def deletesong(interaction: discord.Interaction, song: str, artist: str = None):
+async def deletesong(interaction: discord.Interaction, query: str):
     """Remove a song from the playlist"""
     if spotify is None:
         await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
         return
     
     await interaction.response.defer()
+
+    # Parse the query to separate song and artist
+    song = query
+    artist = None
     
+    # Use rsplit to handle cases where "by" is in the song title
+    if ' by ' in query.lower():
+        parts = query.rsplit(' by ', 1)
+        song = parts[0].strip()
+        artist = parts[1].strip()
+
     try:
         track, result = spotify.remove_song(song, artist)
         
