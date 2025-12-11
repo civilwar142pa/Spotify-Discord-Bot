@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import os
 import sys
 import json
@@ -12,6 +12,7 @@ from pymongo import MongoClient
 from flask import Flask, request
 import threading
 import builtins
+import time
 
 # Prevent input() from blocking/crashing in non-interactive environments
 def non_blocking_input(prompt=''):
@@ -163,16 +164,23 @@ class SpotifyClient:
     def _refresh_token(self):
         """Force refresh the Spotify token"""
         print("🔄 Forcing token refresh...")
-        try:
-            token_info = self.auth_manager.get_cached_token()
-            if token_info and 'refresh_token' in token_info:
-                new_token = self.auth_manager.refresh_access_token(token_info['refresh_token'])
-                print("✅ Token refreshed successfully")
-                print("✅ New token saved to MongoDB automatically")
-            else:
-                print("⚠️ No refresh token found in cache")
-        except Exception as e:
-            print(f"❌ Error refreshing token: {e}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                token_info = self.auth_manager.get_cached_token()
+                if token_info and 'refresh_token' in token_info:
+                    new_token = self.auth_manager.refresh_access_token(token_info['refresh_token'])
+                    print("✅ Token refreshed successfully")
+                    print("✅ New token saved to MongoDB automatically")
+                    return
+                else:
+                    print("⚠️ No refresh token found in cache")
+                    return
+            except Exception as e:
+                print(f"⚠️ Error refreshing token (Attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+        print("❌ Failed to refresh token after multiple attempts.")
 
     def search_and_add_top_result(self, song_query, artist_query=None):
         """Search for a song and add the top result to playlist"""
@@ -230,6 +238,12 @@ class SpotifyClient:
                 print("❌ Authorization required (EOF error)")
                 return None, "❌ Bot is not authenticated. Please run `/spotifyauth` first."
             except Exception as e:
+                # Handle connection resets/aborts by retrying once
+                if attempts == 0 and ("Connection aborted" in str(e) or "Connection reset" in str(e)):
+                    print(f"⚠️ Connection error detected: {e}")
+                    print("🔄 Retrying operation...")
+                    attempts += 1
+                    continue
                 print(f"❌ Error: {e}")
                 return None, f"Error: {e}"
     
@@ -291,6 +305,12 @@ class SpotifyClient:
                 print("❌ Authorization required (EOF error)")
                 return None, "❌ Bot is not authenticated. Please run `/spotifyauth` first."
             except Exception as e:
+                # Handle connection resets/aborts by retrying once
+                if attempts == 0 and ("Connection aborted" in str(e) or "Connection reset" in str(e)):
+                    print(f"⚠️ Connection error detected: {e}")
+                    print("🔄 Retrying operation...")
+                    attempts += 1
+                    continue
                 print(f"❌ Error removing song: {e}")
                 return None, f"Error: {e}"
     
@@ -312,6 +332,12 @@ class SpotifyClient:
             except EOFError:
                 return "❌ Bot is not authenticated. Please run `/spotifyauth` first."
             except Exception as e:
+                # Handle connection resets/aborts by retrying once
+                if attempts == 0 and ("Connection aborted" in str(e) or "Connection reset" in str(e)):
+                    print(f"⚠️ Connection error detected: {e}")
+                    print("🔄 Retrying operation...")
+                    attempts += 1
+                    continue
                 print(f"❌ Error getting playlist link: {e}")
                 return f"Error: {e}"
 
@@ -363,6 +389,16 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 print("✅ Flask health check server started on port 8080")
 
+@tasks.loop(minutes=5)
+async def spotify_keep_alive():
+    """Periodically ping Spotify to keep the connection alive"""
+    if spotify and hasattr(spotify, 'sp'):
+        try:
+            # Run blocking call in executor to avoid blocking Discord bot
+            await bot.loop.run_in_executor(None, spotify.sp.current_user)
+        except Exception:
+            pass # Keep-alive failed, not critical
+
 @bot.event
 async def on_ready():
     print(f'\n✅ {bot.user} has connected to Discord!')
@@ -379,6 +415,11 @@ async def on_ready():
             print(f"   /{cmd.name} - {cmd.description}")
     except Exception as e:
         print(f'❌ Error syncing commands: {e}')
+    
+    # Start keep-alive loop
+    if not spotify_keep_alive.is_running():
+        spotify_keep_alive.start()
+        print("💓 Spotify keep-alive task started")
 
 # SLASH COMMANDS
 
