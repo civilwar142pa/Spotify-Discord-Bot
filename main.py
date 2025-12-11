@@ -750,6 +750,17 @@ async def on_command_error(ctx, error):
                        inline=False)
         await ctx.send(embed=embed, delete_after=15)
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Handle errors in slash commands"""
+    if isinstance(error, app_commands.CommandInvokeError):
+        print(f"❌ Command Error in /{interaction.command.name}: {error.original}")
+    else:
+        print(f"❌ Slash Command Error: {error}")
+    
+    if not interaction.response.is_done():
+        await interaction.response.send_message("❌ An error occurred while processing the command. (Check logs)", ephemeral=True)
+
 if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("📋 Starting bot with configuration:")
