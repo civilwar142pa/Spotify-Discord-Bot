@@ -33,11 +33,31 @@ if not TOKEN:
     print("Please add it in Render dashboard → Environment")
     sys.exit(1)
 
+# Get Channel ID for restriction (optional)
+CHANNEL_ID_ENV = os.getenv('DISCORD_CHANNEL_ID')
+ALLOWED_CHANNEL_ID = None
+if CHANNEL_ID_ENV and CHANNEL_ID_ENV.strip().isdigit():
+    ALLOWED_CHANNEL_ID = int(CHANNEL_ID_ENV)
+    print(f"🔒 Bot restricted to channel ID: {ALLOWED_CHANNEL_ID}")
+else:
+    print("🌍 Bot is active in ALL channels (Global Mode)")
+
 # Intents setup
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+@bot.tree.interaction_check
+async def check_channel(interaction: discord.Interaction) -> bool:
+    """Global check to restrict commands to a specific channel if configured"""
+    if ALLOWED_CHANNEL_ID and interaction.channel_id != ALLOWED_CHANNEL_ID:
+        await interaction.response.send_message(
+            f"⚠️ This bot is restricted to <#{ALLOWED_CHANNEL_ID}>.", 
+            ephemeral=True
+        )
+        return False
+    return True
 
 class MongoDBCacheHandler(CacheHandler):
     """
