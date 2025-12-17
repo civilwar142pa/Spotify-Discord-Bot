@@ -93,13 +93,20 @@ class MongoDBCacheHandler(CacheHandler):
         env_token_str = os.getenv('SPOTIFY_TOKEN_CACHE')
         if env_token_str:
             try:
+                # Clean up potential copy-paste artifacts (extra quotes)
+                env_token_str = env_token_str.strip().strip("'").strip('"')
                 env_token = json.loads(env_token_str)
                 
                 # Logic: If Env Var has a DIFFERENT refresh token than DB, user likely updated it manually.
-                # Or if DB is empty, we migrate.
+                # Or if DB is empty, we migrate. Or if FORCE_TOKEN_RESET is true.
+                force_reset = os.getenv('FORCE_TOKEN_RESET', 'false').lower() == 'true'
                 should_update = False
+                
                 if not db_token:
                     print("📥 Migrating token from Env Var to MongoDB...")
+                    should_update = True
+                elif force_reset:
+                    print("🚨 FORCE_TOKEN_RESET enabled: Overwriting MongoDB cache with Environment Variable.")
                     should_update = True
                 elif db_token and env_token.get('refresh_token') != db_token.get('refresh_token'):
                     print("♻️ Detected NEW token in Environment Variables. Overwriting MongoDB cache...")
@@ -110,7 +117,8 @@ class MongoDBCacheHandler(CacheHandler):
                     return env_token
 
             except Exception as e:
-                print(f"⚠️ Env Token check failed: {e}")
+                print(f"❌ CRITICAL: Failed to parse SPOTIFY_TOKEN_CACHE: {e}")
+                print("   Check for missing brackets {} or extra quotes in the Environment Variable.")
 
         # 3. Return DB token if we didn't use Env token
         if db_token:
@@ -140,8 +148,10 @@ class SpotifyClient:
         self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
         
         # Debug: Show what we found
-        print(f"Client ID: {'✅ Present' if self.client_id else '❌ MISSING'}")
-        print(f"Client Secret: {'✅ Present' if self.client_secret else '❌ MISSING'}")
+        cid_masked = f"{self.client_id[:4]}...{self.client_id[-4:]}" if self.client_id else "MISSING"
+        sec_masked = f"{self.client_secret[:4]}...{self.client_secret[-4:]}" if self.client_secret else "MISSING"
+        print(f"Client ID: {cid_masked}")
+        print(f"Client Secret: {sec_masked}")
         print(f"Redirect URI: {self.redirect_uri}")
         print(f"Playlist ID: {'✅ Present' if self.playlist_id else '❌ MISSING'}")
         
@@ -203,8 +213,11 @@ class SpotifyClient:
                 user = self.sp.current_user()
                 print(f"✅ Connected to Spotify as: {user.get('display_name', user['id'])}")
             except Exception as e:
-                print(f"⚠️ Spotify connection test failed: {e}")
-                print("This might be okay - token might need refresh on first API call")
+                if "Non-interactive environment" in str(e):
+                    print("❌ CRITICAL: Cached token is invalid and cannot be refreshed.")
+                    print("   Likely cause: SPOTIFY_CLIENT_ID in Render does not match the token's Client ID.")
+                else:
+                    print(f"⚠️ Spotify connection test failed: {e}")
         else:
             print("❌ No cached token found.")
             print("💡 Ensure SPOTIFY_TOKEN_CACHE is set for initial migration, or MONGODB_URI is correct.")
@@ -814,7 +827,12 @@ async def botstatus(interaction: discord.Interaction):
             user = await bot.loop.run_in_executor(None, spotify.sp.current_user)
             spotify_status = f"✅ Connected as {user.get('display_name', 'Unknown')}"
         except Exception as e:
-            spotify_status = f"❌ Auth Failed: {str(e).split(':')[0]}"
+            error_msg = str(e)
+            if "Non-interactive environment" in error_msg:
+                spotify_status = "❌ Token Invalid / Credentials Mismatch"
+                spotify_status += "\n⚠️ Check: Client ID in Render must match the one used to generate the token."
+            else:
+                spotify_status = f"❌ Auth Failed: {error_msg}"
             
     embed.add_field(name="Spotify API", value=spotify_status, inline=True)
     
