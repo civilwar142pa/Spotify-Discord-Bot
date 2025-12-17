@@ -142,10 +142,11 @@ class SpotifyClient:
         print("\n🔧 Initializing Spotify Client...")
         
         # Get environment variables
-        self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
-        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
-        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8888/callback')
-        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
+        # Added .strip() to remove accidental spaces from copy-pasting
+        self.client_id = os.getenv('SPOTIFY_CLIENT_ID', '').strip()
+        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET', '').strip()
+        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8888/callback').strip()
+        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID', '').strip()
         
         # Debug: Show what we found
         cid_masked = f"{self.client_id[:4]}...{self.client_id[-4:]}" if self.client_id else "MISSING"
@@ -206,6 +207,17 @@ class SpotifyClient:
         token_info = self.auth_manager.get_cached_token()
         if token_info:
             print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
+            
+            # DEBUG: Attempt manual refresh if expired to catch specific errors
+            if self.auth_manager.is_token_expired(token_info):
+                print("⌛ Token is expired. Attempting manual refresh to debug...")
+                try:
+                    self.auth_manager.refresh_access_token(token_info['refresh_token'])
+                    print("✅ Manual refresh successful")
+                except Exception as e:
+                    print(f"❌ CRITICAL REFRESH FAILURE: {e}")
+                    print("   Check for trailing spaces in SPOTIFY_CLIENT_SECRET in Render.")
+            
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
             
             # Test connection
