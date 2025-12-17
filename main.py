@@ -79,25 +79,43 @@ class MongoDBCacheHandler(CacheHandler):
             raise Exception(f"MongoDB Auth/Connection Failed: {e}")
         
     def get_cached_token(self):
-        # Try to get from DB
+        # 1. Check MongoDB first
         print("🔍 Checking MongoDB for cached token...")
+        db_token = None
         try:
             record = self.collection.find_one({'_id': 'main_token'})
             if record:
-                return record['token_info']
+                db_token = record['token_info']
         except Exception as e:
             print(f"⚠️ MongoDB Read Error: {e}")
             
-        # Fallback: Check environment variable (migration helper)
-        env_token = os.getenv('SPOTIFY_TOKEN_CACHE')
-        if env_token:
+        # 2. Check Environment Variable (for manual updates/fixes)
+        env_token_str = os.getenv('SPOTIFY_TOKEN_CACHE')
+        if env_token_str:
             try:
-                print("📥 Migrating token from Env Var to MongoDB...")
-                token_info = json.loads(env_token)
-                self.save_token_to_cache(token_info)
-                return token_info
+                env_token = json.loads(env_token_str)
+                
+                # Logic: If Env Var has a DIFFERENT refresh token than DB, user likely updated it manually.
+                # Or if DB is empty, we migrate.
+                should_update = False
+                if not db_token:
+                    print("📥 Migrating token from Env Var to MongoDB...")
+                    should_update = True
+                elif db_token and env_token.get('refresh_token') != db_token.get('refresh_token'):
+                    print("♻️ Detected NEW token in Environment Variables. Overwriting MongoDB cache...")
+                    should_update = True
+                
+                if should_update:
+                    self.save_token_to_cache(env_token)
+                    return env_token
+
             except Exception as e:
-                print(f"⚠️ Migration failed: {e}")
+                print(f"⚠️ Env Token check failed: {e}")
+
+        # 3. Return DB token if we didn't use Env token
+        if db_token:
+            return db_token
+            
         return None
 
     def save_token_to_cache(self, token_info):
@@ -789,7 +807,15 @@ async def botstatus(interaction: discord.Interaction):
     embed.add_field(name="Discord API", value="✅ Connected", inline=True)
     
     # Spotify status
-    spotify_status = "✅ Connected" if spotify else "❌ Not connected"
+    spotify_status = "❌ Not initialized"
+    if spotify:
+        try:
+            # Perform a real API call to verify token validity
+            user = await bot.loop.run_in_executor(None, spotify.sp.current_user)
+            spotify_status = f"✅ Connected as {user.get('display_name', 'Unknown')}"
+        except Exception as e:
+            spotify_status = f"❌ Auth Failed: {str(e).split(':')[0]}"
+            
     embed.add_field(name="Spotify API", value=spotify_status, inline=True)
     
     # Environment check
