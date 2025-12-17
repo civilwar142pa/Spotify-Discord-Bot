@@ -375,11 +375,13 @@ class SpotifyClient:
                 return f"Error: {e}"
 
 # Initialize Spotify client
+spotify_init_error = None
 try:
     spotify = SpotifyClient()
     print("✅ Spotify client initialized successfully!")
 except Exception as e:
     print(f"❌ Failed to initialize Spotify client: {e}")
+    spotify_init_error = str(e)
     spotify = None
 
 # Create Flask app for health checks (required for Render web service)
@@ -515,7 +517,10 @@ async def show_commands(interaction: discord.Interaction):
 async def addsong(interaction: discord.Interaction, query: str):
     """Add the top search result to the playlist"""
     if spotify is None:
-        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
+        msg = "❌ Spotify client is not initialized."
+        if spotify_init_error:
+            msg += f"\nReason: {spotify_init_error}"
+        await interaction.response.send_message(msg, ephemeral=True)
         return
     
     # Defer response since Spotify API might take time
@@ -606,7 +611,10 @@ async def addsong(interaction: discord.Interaction, query: str):
 async def deletesong(interaction: discord.Interaction, query: str):
     """Remove a song from the playlist"""
     if spotify is None:
-        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
+        msg = "❌ Spotify client is not initialized."
+        if spotify_init_error:
+            msg += f"\nReason: {spotify_init_error}"
+        await interaction.response.send_message(msg, ephemeral=True)
         return
     
     await interaction.response.defer()
@@ -663,7 +671,10 @@ async def deletesong(interaction: discord.Interaction, query: str):
 async def link(interaction: discord.Interaction):
     """Get the playlist link"""
     if spotify is None:
-        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
+        msg = "❌ Spotify client is not initialized."
+        if spotify_init_error:
+            msg += f"\nReason: {spotify_init_error}"
+        await interaction.response.send_message(msg, ephemeral=True)
         return
     
     await interaction.response.defer()
