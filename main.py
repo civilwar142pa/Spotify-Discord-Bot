@@ -71,12 +71,22 @@ class MongoDBCacheHandler(CacheHandler):
         self.db = self.client.get_database('spotify_bot')
         self.collection = self.db.get_collection('tokens')
         
+        # Test connection immediately to fail fast if auth is bad
+        try:
+            self.client.admin.command('ping')
+            print("✅ MongoDB connection verified")
+        except Exception as e:
+            raise Exception(f"MongoDB Auth/Connection Failed: {e}")
+        
     def get_cached_token(self):
         # Try to get from DB
         print("🔍 Checking MongoDB for cached token...")
-        record = self.collection.find_one({'_id': 'main_token'})
-        if record:
-            return record['token_info']
+        try:
+            record = self.collection.find_one({'_id': 'main_token'})
+            if record:
+                return record['token_info']
+        except Exception as e:
+            print(f"⚠️ MongoDB Read Error: {e}")
             
         # Fallback: Check environment variable (migration helper)
         env_token = os.getenv('SPOTIFY_TOKEN_CACHE')
@@ -91,12 +101,15 @@ class MongoDBCacheHandler(CacheHandler):
         return None
 
     def save_token_to_cache(self, token_info):
-        # Upsert (update or insert) the token
-        self.collection.update_one(
-            {'_id': 'main_token'},
-            {'$set': {'token_info': token_info}},
-            upsert=True
-        )
+        try:
+            # Upsert (update or insert) the token
+            self.collection.update_one(
+                {'_id': 'main_token'},
+                {'$set': {'token_info': token_info}},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"⚠️ MongoDB Write Error: {e}")
 
 class SpotifyClient:
     def __init__(self):
