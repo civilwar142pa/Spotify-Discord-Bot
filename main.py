@@ -9,10 +9,9 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheHandler
 from spotipy.exceptions import SpotifyException
 from pymongo import MongoClient
-from flask import Flask, request
-import threading
 import builtins
 import time
+from keep_alive import keep_alive
 
 # Prevent input() from blocking/crashing in non-interactive environments
 def non_blocking_input(prompt=''):
@@ -22,7 +21,7 @@ def non_blocking_input(prompt=''):
 builtins.input = non_blocking_input
 
 print("=" * 50)
-print("🚀 Starting Spotify Discord Bot on Render")
+print("🚀 Starting Spotify Discord Bot on Replit")
 print("=" * 50)
 
 # Get Discord token from environment
@@ -451,47 +450,6 @@ except Exception as e:
     print(f"❌ Failed to initialize Spotify client: {e}")
     spotify_init_error = str(e)
     spotify = None
-
-# Create Flask app for health checks (required for Render web service)
-app = Flask(__name__)
-
-@app.route('/')
-def health_check():
-    return "✅ Spotify Discord Bot is running!", 200
-
-@app.route('/health')
-def health():
-    return {"status": "healthy", "service": "spotify-discord-bot"}, 200
-
-@app.route('/callback')
-def spotify_callback():
-    """Handle Spotify OAuth callback"""
-    try:
-        code = request.args.get('code')
-        error = request.args.get('error')
-        
-        if error:
-            return f"❌ Spotify authorization failed: {error}", 400
-        
-        if code:
-            print(f"✅ Received Spotify authorization code")
-            # The SpotifyOAuth instance in your main code should handle this automatically
-            return "✅ Spotify authorization successful! You can close this window. The bot should now have access.", 200
-        else:
-            return "⚠️ No authorization code received", 400
-            
-    except Exception as e:
-        print(f"❌ Error in callback: {e}")
-        return f"Error: {str(e)}", 500
-
-# Run Flask in a separate thread
-def run_flask():
-    port = int(os.getenv("PORT", 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
-
-flask_thread = threading.Thread(target=run_flask, daemon=True)
-flask_thread.start()
-print("✅ Flask health check server started")
 
 @tasks.loop(minutes=5)
 async def spotify_keep_alive():
@@ -935,8 +893,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("📋 Starting bot with configuration:")
     print(f"✅ Discord Bot: {'Ready' if TOKEN else 'Missing token'}")
-    print(f"✅ Flask Server: Running on port 8080")
     print("=" * 50 + "\n")
+    
+    keep_alive()
     
     try:
         bot.run(TOKEN)
