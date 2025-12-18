@@ -137,9 +137,31 @@ class MongoDBCacheHandler(CacheHandler):
         except Exception as e:
             print(f"⚠️ MongoDB Write Error: {e}")
 
+class EnvCacheHandler(CacheHandler):
+    """
+    Fallback handler that reads from SPOTIFY_TOKEN_CACHE environment variable.
+    Used when MongoDB connection fails.
+    """
+    def get_cached_token(self):
+        env_token_str = os.getenv('SPOTIFY_TOKEN_CACHE')
+        if env_token_str:
+            try:
+                # Clean up potential copy-paste artifacts
+                env_token_str = env_token_str.strip().strip("'").strip('"')
+                print("⚠️ Using fallback token from SPOTIFY_TOKEN_CACHE")
+                return json.loads(env_token_str)
+            except Exception as e:
+                print(f"❌ Failed to parse SPOTIFY_TOKEN_CACHE: {e}")
+        return None
+
+    def save_token_to_cache(self, token_info):
+        # Cannot save to env var
+        pass
+
 class SpotifyClient:
     def __init__(self):
         print("\n🔧 Initializing Spotify Client...")
+        self.storage_mode = "Unknown"
         
         # Get environment variables
         # Added .strip() to remove accidental spaces from copy-pasting
@@ -182,15 +204,18 @@ class SpotifyClient:
                 print("🍃 Connecting to MongoDB...")
                 cache_handler = MongoDBCacheHandler(mongo_uri)
                 print("✅ MongoDB Cache Handler initialized")
+                self.storage_mode = "✅ MongoDB Atlas"
             except Exception as e:
                 print(f"❌ MongoDB connection failed: {e}")
-                # We will fail loudly later if auth_manager tries to use None
+                print("💡 TIP: Check your MONGODB_URI password. If it has special characters, URL encode them.")
+                print("⚠️ Falling back to Environment Variable (SPOTIFY_TOKEN_CACHE)...")
+                cache_handler = EnvCacheHandler()
+                self.storage_mode = "⚠️ Local Fallback (DB Error)"
         else:
             print("⚠️ MONGODB_URI not found in environment variables")
-            if os.getenv('SPOTIFY_TOKEN_CACHE'):
-                print("❌ CRITICAL: SPOTIFY_TOKEN_CACHE is set, but MONGODB_URI is missing!")
-                print("   The bot cannot migrate the token if it cannot connect to MongoDB.")
-                print("   Please add MONGODB_URI to your Render environment variables.")
+            print("⚠️ Using Environment Variable fallback.")
+            cache_handler = EnvCacheHandler()
+            self.storage_mode = "⚠️ Local Fallback (No DB)"
         
         # Initialize Spotify OAuth
         self.auth_manager = SpotifyOAuth(
@@ -847,6 +872,9 @@ async def botstatus(interaction: discord.Interaction):
                 spotify_status = f"❌ Auth Failed: {error_msg}"
             
     embed.add_field(name="Spotify API", value=spotify_status, inline=True)
+    
+    if spotify:
+        embed.add_field(name="Token Storage", value=spotify.storage_mode, inline=True)
     
     # Environment check
     env_vars = ['DISCORD_TOKEN', 'SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_SECRET', 'SPOTIFY_PLAYLIST_ID']
