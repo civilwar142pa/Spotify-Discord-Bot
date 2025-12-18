@@ -65,7 +65,8 @@ class MongoDBCacheHandler(CacheHandler):
     """
     def __init__(self, connection_string):
         # Parse connection string and connect
-        self.client = MongoClient(connection_string)
+        # Set a 5-second timeout so it doesn't hang indefinitely if IP is blocked
+        self.client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
         # Use a specific database and collection
         self.db = self.client.get_database('spotify_bot')
         self.collection = self.db.get_collection('tokens')
