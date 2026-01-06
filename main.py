@@ -929,6 +929,8 @@ async def guess(interaction: discord.Interaction):
         await interaction.response.send_message("❌ No active game! Run `/random` first to generate a playlist.", ephemeral=True)
         return
 
+    await interaction.response.defer()
+
     embed = discord.Embed(
         title="🎵 Who's Playlist Is This?",
         description="Vote for the person you think chose the songs!",
