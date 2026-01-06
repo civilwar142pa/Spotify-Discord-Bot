@@ -9,9 +9,14 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheHandler
 from spotipy.exceptions import SpotifyException
 from pymongo import MongoClient
+from flask import Flask, request
+import threading
 import builtins
 import time
-from keep_alive import keep_alive
+import csv
+import io
+import random
+import aiohttp
 
 # Prevent input() from blocking/crashing in non-interactive environments
 def non_blocking_input(prompt=''):
@@ -21,7 +26,7 @@ def non_blocking_input(prompt=''):
 builtins.input = non_blocking_input
 
 print("=" * 50)
-print("🚀 Starting Spotify Discord Bot on Replit")
+print("🚀 Starting Spotify Discord Bot on Render")
 print("=" * 50)
 
 # Get Discord token from environment
@@ -65,116 +70,51 @@ class MongoDBCacheHandler(CacheHandler):
     """
     def __init__(self, connection_string):
         # Parse connection string and connect
-        # Set a 5-second timeout so it doesn't hang indefinitely if IP is blocked
-        self.client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
+        self.client = MongoClient(connection_string)
         # Use a specific database and collection
         self.db = self.client.get_database('spotify_bot')
         self.collection = self.db.get_collection('tokens')
         
-        # Test connection immediately to fail fast if auth is bad
-        try:
-            self.client.admin.command('ping')
-            print("✅ MongoDB connection verified")
-        except Exception as e:
-            raise Exception(f"MongoDB Auth/Connection Failed: {e}")
-        
     def get_cached_token(self):
-        # 1. Check MongoDB first
+        # Try to get from DB
         print("🔍 Checking MongoDB for cached token...")
-        db_token = None
-        try:
-            record = self.collection.find_one({'_id': 'main_token'})
-            if record:
-                db_token = record['token_info']
-        except Exception as e:
-            print(f"⚠️ MongoDB Read Error: {e}")
+        record = self.collection.find_one({'_id': 'main_token'})
+        if record:
+            return record['token_info']
             
-        # 2. Check Environment Variable (for manual updates/fixes)
-        env_token_str = os.getenv('SPOTIFY_TOKEN_CACHE')
-        if env_token_str:
+        # Fallback: Check environment variable (migration helper)
+        env_token = os.getenv('SPOTIFY_TOKEN_CACHE')
+        if env_token:
             try:
-                # Clean up potential copy-paste artifacts (extra quotes)
-                env_token_str = env_token_str.strip().strip("'").strip('"')
-                env_token = json.loads(env_token_str)
-                
-                # Logic: If Env Var has a DIFFERENT refresh token than DB, user likely updated it manually.
-                # Or if DB is empty, we migrate. Or if FORCE_TOKEN_RESET is true.
-                force_reset = os.getenv('FORCE_TOKEN_RESET', 'false').lower() == 'true'
-                should_update = False
-                
-                if not db_token:
-                    print("📥 Migrating token from Env Var to MongoDB...")
-                    should_update = True
-                elif force_reset:
-                    print("🚨 FORCE_TOKEN_RESET enabled: Overwriting MongoDB cache with Environment Variable.")
-                    should_update = True
-                elif db_token and env_token.get('refresh_token') != db_token.get('refresh_token'):
-                    print("♻️ Detected NEW token in Environment Variables. Overwriting MongoDB cache...")
-                    should_update = True
-                
-                if should_update:
-                    self.save_token_to_cache(env_token)
-                    return env_token
-
+                print("📥 Migrating token from Env Var to MongoDB...")
+                token_info = json.loads(env_token)
+                self.save_token_to_cache(token_info)
+                return token_info
             except Exception as e:
-                print(f"❌ CRITICAL: Failed to parse SPOTIFY_TOKEN_CACHE: {e}")
-                print("   Check for missing brackets {} or extra quotes in the Environment Variable.")
-
-        # 3. Return DB token if we didn't use Env token
-        if db_token:
-            return db_token
-            
+                print(f"⚠️ Migration failed: {e}")
         return None
 
     def save_token_to_cache(self, token_info):
-        try:
-            # Upsert (update or insert) the token
-            self.collection.update_one(
-                {'_id': 'main_token'},
-                {'$set': {'token_info': token_info}},
-                upsert=True
-            )
-        except Exception as e:
-            print(f"⚠️ MongoDB Write Error: {e}")
-
-class EnvCacheHandler(CacheHandler):
-    """
-    Fallback handler that reads from SPOTIFY_TOKEN_CACHE environment variable.
-    Used when MongoDB connection fails.
-    """
-    def get_cached_token(self):
-        env_token_str = os.getenv('SPOTIFY_TOKEN_CACHE')
-        if env_token_str:
-            try:
-                # Clean up potential copy-paste artifacts
-                env_token_str = env_token_str.strip().strip("'").strip('"')
-                print("⚠️ Using fallback token from SPOTIFY_TOKEN_CACHE")
-                return json.loads(env_token_str)
-            except Exception as e:
-                print(f"❌ Failed to parse SPOTIFY_TOKEN_CACHE: {e}")
-        return None
-
-    def save_token_to_cache(self, token_info):
-        # Cannot save to env var
-        pass
+        # Upsert (update or insert) the token
+        self.collection.update_one(
+            {'_id': 'main_token'},
+            {'$set': {'token_info': token_info}},
+            upsert=True
+        )
 
 class SpotifyClient:
     def __init__(self):
         print("\n🔧 Initializing Spotify Client...")
-        self.storage_mode = "Unknown"
         
         # Get environment variables
-        # Added .strip() to remove accidental spaces from copy-pasting
-        self.client_id = os.getenv('SPOTIFY_CLIENT_ID', '').strip()
-        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET', '').strip()
-        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8888/callback').strip()
-        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID', '').strip()
+        self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
+        self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
+        self.redirect_uri = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8888/callback')
+        self.playlist_id = os.getenv('SPOTIFY_PLAYLIST_ID')
         
         # Debug: Show what we found
-        cid_masked = f"{self.client_id[:4]}...{self.client_id[-4:]}" if self.client_id else "MISSING"
-        sec_masked = f"{self.client_secret[:4]}...{self.client_secret[-4:]}" if self.client_secret else "MISSING"
-        print(f"Client ID: {cid_masked}")
-        print(f"Client Secret: {sec_masked}")
+        print(f"Client ID: {'✅ Present' if self.client_id else '❌ MISSING'}")
+        print(f"Client Secret: {'✅ Present' if self.client_secret else '❌ MISSING'}")
         print(f"Redirect URI: {self.redirect_uri}")
         print(f"Playlist ID: {'✅ Present' if self.playlist_id else '❌ MISSING'}")
         
@@ -204,18 +144,15 @@ class SpotifyClient:
                 print("🍃 Connecting to MongoDB...")
                 cache_handler = MongoDBCacheHandler(mongo_uri)
                 print("✅ MongoDB Cache Handler initialized")
-                self.storage_mode = "✅ MongoDB Atlas"
             except Exception as e:
                 print(f"❌ MongoDB connection failed: {e}")
-                print("💡 TIP: Check your MONGODB_URI password. If it has special characters, URL encode them.")
-                print("⚠️ Falling back to Environment Variable (SPOTIFY_TOKEN_CACHE)...")
-                cache_handler = EnvCacheHandler()
-                self.storage_mode = "⚠️ Local Fallback (DB Error)"
+                # We will fail loudly later if auth_manager tries to use None
         else:
             print("⚠️ MONGODB_URI not found in environment variables")
-            print("⚠️ Using Environment Variable fallback.")
-            cache_handler = EnvCacheHandler()
-            self.storage_mode = "⚠️ Local Fallback (No DB)"
+            if os.getenv('SPOTIFY_TOKEN_CACHE'):
+                print("❌ CRITICAL: SPOTIFY_TOKEN_CACHE is set, but MONGODB_URI is missing!")
+                print("   The bot cannot migrate the token if it cannot connect to MongoDB.")
+                print("   Please add MONGODB_URI to your Render environment variables.")
         
         # Initialize Spotify OAuth
         self.auth_manager = SpotifyOAuth(
@@ -232,17 +169,6 @@ class SpotifyClient:
         token_info = self.auth_manager.get_cached_token()
         if token_info:
             print(f"✅ Found cached token (expires at: {token_info.get('expires_at', 'N/A')})")
-            
-            # DEBUG: Attempt manual refresh if expired to catch specific errors
-            if self.auth_manager.is_token_expired(token_info):
-                print("⌛ Token is expired. Attempting manual refresh to debug...")
-                try:
-                    self.auth_manager.refresh_access_token(token_info['refresh_token'])
-                    print("✅ Manual refresh successful")
-                except Exception as e:
-                    print(f"❌ CRITICAL REFRESH FAILURE: {e}")
-                    print("   Check for trailing spaces in SPOTIFY_CLIENT_SECRET in Render.")
-            
             self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
             
             # Test connection
@@ -250,11 +176,8 @@ class SpotifyClient:
                 user = self.sp.current_user()
                 print(f"✅ Connected to Spotify as: {user.get('display_name', user['id'])}")
             except Exception as e:
-                if "Non-interactive environment" in str(e):
-                    print("❌ CRITICAL: Cached token is invalid and cannot be refreshed.")
-                    print("   Likely cause: SPOTIFY_CLIENT_ID in Render does not match the token's Client ID.")
-                else:
-                    print(f"⚠️ Spotify connection test failed: {e}")
+                print(f"⚠️ Spotify connection test failed: {e}")
+                print("This might be okay - token might need refresh on first API call")
         else:
             print("❌ No cached token found.")
             print("💡 Ensure SPOTIFY_TOKEN_CACHE is set for initial migration, or MONGODB_URI is correct.")
@@ -443,14 +366,53 @@ class SpotifyClient:
                 return f"Error: {e}"
 
 # Initialize Spotify client
-spotify_init_error = None
 try:
     spotify = SpotifyClient()
     print("✅ Spotify client initialized successfully!")
 except Exception as e:
     print(f"❌ Failed to initialize Spotify client: {e}")
-    spotify_init_error = str(e)
     spotify = None
+
+# Create Flask app for health checks (required for Render web service)
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "✅ Spotify Discord Bot is running!", 200
+
+@app.route('/health')
+def health():
+    return {"status": "healthy", "service": "spotify-discord-bot"}, 200
+
+@app.route('/callback')
+def spotify_callback():
+    """Handle Spotify OAuth callback"""
+    try:
+        code = request.args.get('code')
+        error = request.args.get('error')
+        
+        if error:
+            return f"❌ Spotify authorization failed: {error}", 400
+        
+        if code:
+            print(f"✅ Received Spotify authorization code")
+            # The SpotifyOAuth instance in your main code should handle this automatically
+            return "✅ Spotify authorization successful! You can close this window. The bot should now have access.", 200
+        else:
+            return "⚠️ No authorization code received", 400
+            
+    except Exception as e:
+        print(f"❌ Error in callback: {e}")
+        return f"Error: {str(e)}", 500
+
+# Run Flask in a separate thread
+def run_flask():
+    port = int(os.getenv("PORT", 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+print("✅ Flask health check server started")
 
 @tasks.loop(minutes=5)
 async def spotify_keep_alive():
@@ -484,6 +446,118 @@ async def on_ready():
         spotify_keep_alive.start()
         print("💓 Spotify keep-alive task started")
 
+# --- GUESSING GAME LOGIC ---
+
+async def fetch_game_data():
+    """Fetch and parse the Google Sheet CSV data"""
+    sheet_id = '1u0tu93AseqxiG9faphmfDK8w1bWYGNsNsdKxkRkuSHo'
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    print(f"❌ Failed to fetch CSV: {resp.status}")
+                    return []
+                text = await resp.text()
+                
+        f = io.StringIO(text)
+        reader = csv.DictReader(f)
+        users = []
+        
+        for row in reader:
+            # Try to find name (handle potential header variations)
+            name = row.get('Name') or row.get('Your Name')
+            if not name:
+                continue
+                
+            # Try to find songs
+            songs = []
+            # Check for 'Song 1' through 'Song 4'
+            for i in range(1, 5):
+                s = row.get(f'Song {i}')
+                if s:
+                    songs.append(s)
+            
+            # Fallback: if no songs found via keys, try values by index
+            if not songs:
+                values = list(row.values())
+                # Assuming standard form: Timestamp, Name, Song1, Song2, Song3, Song4
+                # Skip first two columns
+                for v in values[2:6]:
+                    if v:
+                        songs.append(v)
+                        
+            if songs:
+                users.append({'name': name, 'songs': songs})
+                
+        return users
+    except Exception as e:
+        print(f"❌ Error fetching game data: {e}")
+        return []
+
+class GuessButton(discord.ui.Button):
+    def __init__(self, label):
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+    
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        user_id = interaction.user.id
+        
+        if user_id in view.votes:
+            if view.votes[user_id] == self.label:
+                await interaction.response.send_message(f"You already voted for **{self.label}**!", ephemeral=True)
+            else:
+                view.votes[user_id] = self.label
+                await interaction.response.send_message(f"🔄 Vote changed to **{self.label}**!", ephemeral=True)
+        else:
+            view.votes[user_id] = self.label
+            await interaction.response.send_message(f"🗳️ Voted for **{self.label}**!", ephemeral=True)
+
+class GuessGameView(discord.ui.View):
+    def __init__(self, correct_answer, options):
+        super().__init__(timeout=30)
+        self.correct_answer = correct_answer
+        self.votes = {}
+        self.message = None
+        for option in options:
+            self.add_item(GuessButton(option))
+            
+    async def on_timeout(self):
+        if not self.message:
+            return
+            
+        # Tally votes
+        vote_counts = {}
+        for vote in self.votes.values():
+            vote_counts[vote] = vote_counts.get(vote, 0) + 1
+            
+        # Disable buttons and show results
+        for child in self.children:
+            child.disabled = True
+            count = vote_counts.get(child.label, 0)
+            
+            if child.label == self.correct_answer:
+                child.style = discord.ButtonStyle.success
+                child.label = f"{child.label} (Correct! - {count})"
+            else:
+                child.style = discord.ButtonStyle.secondary
+                child.label = f"{child.label} ({count})"
+        
+        # Create result text
+        winners = [f"<@{uid}>" for uid, vote in self.votes.items() if vote == self.correct_answer]
+        
+        result_text = f"⏰ **Poll Ended!**\n\n✅ The correct answer was: **{self.correct_answer}**"
+        if winners:
+            result_text += f"\n🎉 **Winners:** {', '.join(winners)}"
+        else:
+            result_text += "\n❌ No one guessed correctly!"
+            
+        try:
+            await self.message.edit(content=result_text, view=self)
+        except Exception as e:
+            print(f"Error updating game message: {e}")
+
 # SLASH COMMANDS
 
 @bot.tree.command(name="commands", description="Show all available commands")
@@ -513,6 +587,8 @@ async def show_commands(interaction: discord.Interaction):
     embed.add_field(
         name="🔧 Utility Commands",
         value=(
+            "**/guess**\n"
+            "Play the music guessing game\n\n"
             "**/botstatus**\n"
             "Check bot and Spotify connection status\n\n"
             "**/spotifyauth**\n"
@@ -544,10 +620,7 @@ async def show_commands(interaction: discord.Interaction):
 async def addsong(interaction: discord.Interaction, query: str):
     """Add the top search result to the playlist"""
     if spotify is None:
-        msg = "❌ Spotify client is not initialized."
-        if spotify_init_error:
-            msg += f"\nReason: {spotify_init_error}"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
         return
     
     # Defer response since Spotify API might take time
@@ -638,10 +711,7 @@ async def addsong(interaction: discord.Interaction, query: str):
 async def deletesong(interaction: discord.Interaction, query: str):
     """Remove a song from the playlist"""
     if spotify is None:
-        msg = "❌ Spotify client is not initialized."
-        if spotify_init_error:
-            msg += f"\nReason: {spotify_init_error}"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
         return
     
     await interaction.response.defer()
@@ -698,10 +768,7 @@ async def deletesong(interaction: discord.Interaction, query: str):
 async def link(interaction: discord.Interaction):
     """Get the playlist link"""
     if spotify is None:
-        msg = "❌ Spotify client is not initialized."
-        if spotify_init_error:
-            msg += f"\nReason: {spotify_init_error}"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message("❌ Spotify client is not initialized. Check bot logs.", ephemeral=True)
         return
     
     await interaction.response.defer()
@@ -758,6 +825,44 @@ async def link(interaction: discord.Interaction):
             color=discord.Color.red()
         )
         await interaction.followup.send(embed=error_embed)
+
+@bot.tree.command(name="guess", description="Play a guessing game: Who liked these songs?")
+async def guess(interaction: discord.Interaction):
+    """Start a round of the music guessing game"""
+    await interaction.response.defer()
+    
+    users = await fetch_game_data()
+    
+    if len(users) < 4:
+        await interaction.followup.send("❌ Not enough data in the spreadsheet to play (need at least 4 users).")
+        return
+
+    # Game Logic
+    target = random.choice(users)
+    others = [u for u in users if u['name'] != target['name']]
+    
+    if len(others) < 3:
+         await interaction.followup.send("❌ Not enough unique users to generate decoys.")
+         return
+
+    decoys = random.sample(others, 3)
+    options = [target['name']] + [d['name'] for d in decoys]
+    random.shuffle(options)
+    
+    # Create Embed
+    embed = discord.Embed(
+        title="🎵 Who's Playlist Is This?",
+        description="Guess which user chose these songs! (30s Poll)",
+        color=discord.Color.purple()
+    )
+    
+    song_list = "\n".join([f"• {song}" for song in target['songs']])
+    embed.add_field(name="The Songs", value=song_list, inline=False)
+    embed.set_footer(text="Vote by clicking a button below! Results in 30s.")
+    
+    view = GuessGameView(target['name'], options)
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
 
 @bot.tree.command(name="spotifyauth", description="Get Spotify authentication URL if needed")
 async def spotifyauth(interaction: discord.Interaction):
@@ -816,24 +921,8 @@ async def botstatus(interaction: discord.Interaction):
     embed.add_field(name="Discord API", value="✅ Connected", inline=True)
     
     # Spotify status
-    spotify_status = "❌ Not initialized"
-    if spotify:
-        try:
-            # Perform a real API call to verify token validity
-            user = await bot.loop.run_in_executor(None, spotify.sp.current_user)
-            spotify_status = f"✅ Connected as {user.get('display_name', 'Unknown')}"
-        except Exception as e:
-            error_msg = str(e)
-            if "Non-interactive environment" in error_msg:
-                spotify_status = "❌ Token Invalid / Credentials Mismatch"
-                spotify_status += "\n⚠️ Check: Client ID in Render must match the one used to generate the token."
-            else:
-                spotify_status = f"❌ Auth Failed: {error_msg}"
-            
+    spotify_status = "✅ Connected" if spotify else "❌ Not connected"
     embed.add_field(name="Spotify API", value=spotify_status, inline=True)
-    
-    if spotify:
-        embed.add_field(name="Token Storage", value=spotify.storage_mode, inline=True)
     
     # Environment check
     env_vars = ['DISCORD_TOKEN', 'SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_SECRET', 'SPOTIFY_PLAYLIST_ID']
@@ -849,6 +938,7 @@ async def botstatus(interaction: discord.Interaction):
         "/addsong - Add a song",
         "/deletesong - Remove a song",
         "/link - Get playlist link",
+        "/guess - Play guessing game",
         "/botstatus - Check status",
         "/spotifyauth - Get auth URL",
         "/commands - Show all commands"
@@ -894,9 +984,8 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("📋 Starting bot with configuration:")
     print(f"✅ Discord Bot: {'Ready' if TOKEN else 'Missing token'}")
+    print(f"✅ Flask Server: Running on port 8080")
     print("=" * 50 + "\n")
-    
-    keep_alive()
     
     try:
         bot.run(TOKEN)
