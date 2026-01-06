@@ -365,6 +365,20 @@ class SpotifyClient:
                 print(f"❌ Error getting playlist link: {e}")
                 return f"Error: {e}"
 
+    def get_track_info(self, song_name):
+        """Search for a song and return (name, artist, url)"""
+        try:
+            results = self.sp.search(q=song_name, type='track', limit=1)
+            if results['tracks']['items']:
+                track = results['tracks']['items'][0]
+                name = track['name']
+                artist = ', '.join([a['name'] for a in track['artists']])
+                url = track['external_urls']['spotify']
+                return {'name': name, 'artist': artist, 'url': url}
+        except Exception as e:
+            print(f"Error searching for {song_name}: {e}")
+        return None
+
 # Initialize Spotify client
 try:
     spotify = SpotifyClient()
@@ -447,6 +461,9 @@ async def on_ready():
         print("💓 Spotify keep-alive task started")
 
 # --- GUESSING GAME LOGIC ---
+
+# Global state for the current game round
+active_game = None
 
 async def fetch_game_data():
     """Fetch and parse the Google Sheet CSV data"""
@@ -589,6 +606,8 @@ async def show_commands(interaction: discord.Interaction):
         value=(
             "**/guess**\n"
             "Play the music guessing game\n\n"
+            "**/random**\n"
+            "Generate a mystery playlist with Spotify links\n\n"
             "**/botstatus**\n"
             "Check bot and Spotify connection status\n\n"
             "**/spotifyauth**\n"
@@ -826,21 +845,19 @@ async def link(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=error_embed)
 
-@bot.tree.command(name="guess", description="Play a guessing game: Who liked these songs?")
-async def guess(interaction: discord.Interaction):
-    """Start a round of the music guessing game"""
+@bot.tree.command(name="random", description="Pick a random user's songs for the guessing game")
+async def random_songs(interaction: discord.Interaction):
+    """Generate a mystery playlist with Spotify links"""
+    global active_game
     await interaction.response.defer()
     
     users = await fetch_game_data()
-    
     if len(users) < 4:
         await interaction.followup.send("❌ Not enough data in the spreadsheet to play (need at least 4 users).")
         return
 
-    # Game Logic
     target = random.choice(users)
     others = [u for u in users if u['name'] != target['name']]
-    
     if len(others) < 3:
          await interaction.followup.send("❌ Not enough unique users to generate decoys.")
          return
@@ -849,18 +866,54 @@ async def guess(interaction: discord.Interaction):
     options = [target['name']] + [d['name'] for d in decoys]
     random.shuffle(options)
     
+    # Get Spotify Links
+    songs_display = []
+    for song in target['songs']:
+        info = None
+        if spotify:
+            info = spotify.get_track_info(song)
+        
+        if info:
+            songs_display.append(f"• [{info['name']} - {info['artist']}]({info['url']})")
+        else:
+            songs_display.append(f"• {song}")
+
+    active_game = {
+        'target_name': target['name'],
+        'options': options,
+        'songs_display': songs_display
+    }
+    
     # Create Embed
     embed = discord.Embed(
+        title="🎲 Mystery Playlist Generated!",
+        description="Listen to the songs below and use `/guess` to vote for who picked them!",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="The Songs", value="\n".join(songs_display), inline=False)
+    
+    await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="guess", description="Start the voting poll for the current mystery playlist")
+async def guess(interaction: discord.Interaction):
+    """Start the voting poll"""
+    global active_game
+    
+    if not active_game:
+        await interaction.response.send_message("❌ No active game! Run `/random` first to generate a playlist.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
         title="🎵 Who's Playlist Is This?",
-        description="Guess which user chose these songs! (30s Poll)",
+        description="Vote for the person you think chose the songs!",
         color=discord.Color.purple()
     )
     
-    song_list = "\n".join([f"• {song}" for song in target['songs']])
-    embed.add_field(name="The Songs", value=song_list, inline=False)
+    # Show songs again for context
+    embed.add_field(name="The Songs", value="\n".join(active_game['songs_display']), inline=False)
     embed.set_footer(text="Vote by clicking a button below! Results in 30s.")
     
-    view = GuessGameView(target['name'], options)
+    view = GuessGameView(active_game['target_name'], active_game['options'])
     msg = await interaction.followup.send(embed=embed, view=view)
     view.message = msg
 
