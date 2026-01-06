@@ -897,7 +897,7 @@ async def random_songs(interaction: discord.Interaction):
     for song in target['songs']:
         info = None
         if spotify:
-            info = spotify.get_track_info(song)
+            info = await bot.loop.run_in_executor(None, spotify.get_track_info, song)
         
         if info:
             songs_display.append(f"• [{info['name']} - {info['artist']}]({info['url']})")
@@ -1056,8 +1056,13 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     else:
         print(f"❌ Slash Command Error: {error}")
     
-    if not interaction.response.is_done():
-        await interaction.response.send_message("❌ An error occurred while processing the command. (Check logs)", ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send("❌ An error occurred while processing the command. (Check logs)", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ An error occurred while processing the command. (Check logs)", ephemeral=True)
+    except Exception as e:
+        print(f"❌ Could not send error message to user: {e}")
 
 if __name__ == "__main__":
     print("\n" + "=" * 50)
