@@ -480,33 +480,59 @@ async def fetch_game_data():
                 
         f = io.StringIO(text)
         reader = csv.DictReader(f)
+        
+        # Normalize headers to handle variations (case, whitespace)
+        headers = reader.fieldnames
+        if not headers:
+            return []
+            
+        # Create a map of normalized keys to actual headers
+        # e.g. "song 1" -> "Song 1 "
+        header_map = {h.strip().lower(): h for h in headers}
+        
         users = []
         
         for row in reader:
-            # Try to find name (handle potential header variations)
-            name = row.get('Name') or row.get('Your Name')
+            # 1. Find Name
+            # Check for specific keys first
+            name_key = None
+            if 'your name' in header_map:
+                name_key = header_map['your name']
+            elif 'name' in header_map:
+                name_key = header_map['name']
+            
+            name = row.get(name_key) if name_key else None
+            
+            # Fallback: Use 2nd column (index 1) if name key not found
             if not name:
+                values = list(row.values())
+                if len(values) > 1:
+                    name = values[1]
+            
+            if not name or not name.strip():
                 continue
                 
-            # Try to find songs
+            # 2. Find Songs
             songs = []
-            # Check for 'Song 1' through 'Song 4'
+            # Look for "song 1", "song 2", etc.
             for i in range(1, 5):
-                s = row.get(f'Song {i}')
-                if s:
-                    songs.append(s)
+                key = f"song {i}"
+                if key in header_map:
+                    s = row.get(header_map[key])
+                    if s and s.strip():
+                        songs.append(s.strip())
             
-            # Fallback: if no songs found via keys, try values by index
+            # Fallback: Use columns 3-6 (indices 2-5)
             if not songs:
                 values = list(row.values())
-                # Assuming standard form: Timestamp, Name, Song1, Song2, Song3, Song4
-                # Skip first two columns
-                for v in values[2:6]:
-                    if v:
-                        songs.append(v)
+                # Assuming: Timestamp, Name, Song1, Song2, Song3, Song4
+                if len(values) >= 6:
+                    for v in values[2:6]:
+                        if v and v.strip():
+                            songs.append(v.strip())
                         
             if songs:
-                users.append({'name': name, 'songs': songs})
+                users.append({'name': name.strip(), 'songs': songs})
                 
         return users
     except Exception as e:
