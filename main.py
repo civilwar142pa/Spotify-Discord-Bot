@@ -102,6 +102,41 @@ class MongoDBCacheHandler(CacheHandler):
             upsert=True
         )
 
+class GameHistoryManager:
+    """Tracks which users have already been picked for the game"""
+    def __init__(self, connection_string):
+        self.collection = None
+        self.local_history = set()
+        
+        if connection_string:
+            try:
+                client = MongoClient(connection_string)
+                db = client.get_database('spotify_bot')
+                self.collection = db.get_collection('game_history')
+                print("✅ Game History Manager connected to MongoDB")
+            except Exception as e:
+                print(f"⚠️ Game History Manager failed to connect: {e}")
+
+    def get_used_users(self):
+        """Get list of names that have already been picked"""
+        if self.collection is not None:
+            return [doc['name'] for doc in self.collection.find()]
+        return list(self.local_history)
+
+    def mark_user(self, name):
+        """Mark a user as picked"""
+        if self.collection is not None:
+            self.collection.update_one({'name': name}, {'$set': {'timestamp': time.time()}}, upsert=True)
+        else:
+            self.local_history.add(name)
+
+    def reset(self):
+        """Clear the history"""
+        if self.collection is not None:
+            self.collection.delete_many({})
+        else:
+            self.local_history.clear()
+
 class SpotifyClient:
     def __init__(self):
         print("\n🔧 Initializing Spotify Client...")
@@ -387,6 +422,9 @@ except Exception as e:
     print(f"❌ Failed to initialize Spotify client: {e}")
     spotify = None
 
+# Initialize Game History
+game_history = GameHistoryManager(os.getenv('MONGODB_URI'))
+
 # Create Flask app for health checks (required for Render web service)
 app = Flask(__name__)
 
@@ -468,7 +506,8 @@ active_game = None
 async def fetch_game_data():
     """Fetch and parse the Google Sheet CSV data"""
     sheet_id = '1u0tu93AseqxiG9faphmfDK8w1bWYGNsNsdKxkRkuSHo'
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    # Add timestamp to prevent caching
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&t={int(time.time())}"
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -533,7 +572,12 @@ async def fetch_game_data():
                         
             if songs:
                 users.append({'name': name.strip(), 'songs': songs})
-                
+        
+        # Deduplicate users by name (keep latest entry)
+        unique_map = {u['name']: u for u in users}
+        users = list(unique_map.values())
+        
+        print(f"📊 Fetched {len(users)} unique users from spreadsheet")
         return users
     except Exception as e:
         print(f"❌ Error fetching game data: {e}")
@@ -634,6 +678,8 @@ async def show_commands(interaction: discord.Interaction):
             "Play the music guessing game\n\n"
             "**/random**\n"
             "Generate a mystery playlist with Spotify links\n\n"
+            "**/resetgame**\n"
+            "Reset the list of picked users\n\n"
             "**/botstatus**\n"
             "Check bot and Spotify connection status\n\n"
             "**/spotifyauth**\n"
@@ -882,7 +928,17 @@ async def random_songs(interaction: discord.Interaction):
         await interaction.followup.send("❌ Not enough data in the spreadsheet to play (need at least 4 users).")
         return
 
-    target = random.choice(users)
+    # Filter out users who have already been picked
+    used_names = game_history.get_used_users()
+    available_users = [u for u in users if u['name'] not in used_names]
+    
+    if not available_users:
+        await interaction.followup.send("⚠️ **All users have been picked!**\nRun `/resetgame` to clear the history and start over.")
+        return
+
+    target = random.choice(available_users)
+    game_history.mark_user(target['name'])
+    
     others = [u for u in users if u['name'] != target['name']]
     if len(others) < 3:
          await interaction.followup.send("❌ Not enough unique users to generate decoys.")
@@ -919,6 +975,12 @@ async def random_songs(interaction: discord.Interaction):
     embed.add_field(name="The Songs", value="\n".join(songs_display), inline=False)
     
     await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="resetgame", description="Reset the list of users who have been picked")
+async def resetgame(interaction: discord.Interaction):
+    """Clear the game history so users can be picked again"""
+    game_history.reset()
+    await interaction.response.send_message("🔄 **Game History Reset!**\nAll users in the spreadsheet can now be picked again.")
 
 @bot.tree.command(name="guess", description="Start the voting poll for the current mystery playlist")
 async def guess(interaction: discord.Interaction):
