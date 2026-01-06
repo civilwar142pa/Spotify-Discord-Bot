@@ -403,7 +403,15 @@ class SpotifyClient:
     def get_track_info(self, song_name):
         """Search for a song and return (name, artist, url)"""
         try:
-            results = self.sp.search(q=song_name, type='track', limit=1)
+            query = song_name
+            # Handle "Song by Artist" format from spreadsheet
+            if ' by ' in song_name.lower():
+                split_idx = song_name.lower().rfind(' by ')
+                track_name = song_name[:split_idx].strip()
+                artist_name = song_name[split_idx + 4:].strip()
+                query = f"track:{track_name} artist:{artist_name}"
+            
+            results = self.sp.search(q=query, type='track', limit=1)
             if results['tracks']['items']:
                 track = results['tracks']['items'][0]
                 name = track['name']
