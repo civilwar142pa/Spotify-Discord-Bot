@@ -683,11 +683,11 @@ async def addsong(interaction: discord.Interaction, query: str):
     
     try:
         # Search and add song
-        track, result = spotify.search_and_add_top_result(song, artist)
+        track, result = await bot.loop.run_in_executor(None, spotify.search_and_add_top_result, song, artist)
         
         if track:
             # Get playlist link
-            playlist_link = spotify.get_playlist_link()
+            playlist_link = await bot.loop.run_in_executor(None, spotify.get_playlist_link)
             
             # Create a beautiful embed
             embed = discord.Embed(
@@ -772,7 +772,7 @@ async def deletesong(interaction: discord.Interaction, query: str):
         artist = query[split_idx + 4:].strip()
 
     try:
-        track, result = spotify.remove_song(song, artist)
+        track, result = await bot.loop.run_in_executor(None, spotify.remove_song, song, artist)
         
         if track:
             # Success embed
@@ -819,7 +819,7 @@ async def link(interaction: discord.Interaction):
     await interaction.response.defer()
     
     try:
-        link = spotify.get_playlist_link()
+        link = await bot.loop.run_in_executor(None, spotify.get_playlist_link)
         
         if "https://open.spotify.com" in link:
             # Create embed with playlist link
@@ -831,7 +831,7 @@ async def link(interaction: discord.Interaction):
             
             # Try to get playlist info for nicer display
             try:
-                playlist = spotify.sp.playlist(spotify.playlist_id)
+                playlist = await bot.loop.run_in_executor(None, lambda: spotify.sp.playlist(spotify.playlist_id))
                 if playlist['name']:
                     embed.title = f"🎵 {playlist['name']}"
                 
