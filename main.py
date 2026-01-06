@@ -417,7 +417,9 @@ class SpotifyClient:
                 name = track['name']
                 artist = ', '.join([a['name'] for a in track['artists']])
                 url = track['external_urls']['spotify']
-                return {'name': name, 'artist': artist, 'url': url}
+                # Get album art (usually the first image is the largest)
+                image = track['album']['images'][0]['url'] if track['album']['images'] else None
+                return {'name': name, 'artist': artist, 'url': url, 'image': image}
         except Exception as e:
             print(f"Error searching for {song_name}: {e}")
         return None
@@ -958,29 +960,39 @@ async def random_songs(interaction: discord.Interaction):
     
     # Get Spotify Links
     songs_display = []
-    for song in target['songs']:
+    thumbnail_url = None
+    
+    for i, song in enumerate(target['songs']):
         info = None
         if spotify:
             info = await bot.loop.run_in_executor(None, spotify.get_track_info, song)
         
         if info:
-            songs_display.append(f"• [{info['name']} - {info['artist']}]({info['url']})")
+            # Use the first song's image as the playlist thumbnail
+            if not thumbnail_url and info.get('image'):
+                thumbnail_url = info['image']
+            songs_display.append(f"**{i+1}.** [{info['name']}]({info['url']})\n   by *{info['artist']}*")
         else:
-            songs_display.append(f"• {song}")
+            songs_display.append(f"**{i+1}.** {song}")
 
     active_game = {
         'target_name': target['name'],
         'options': options,
-        'songs_display': songs_display
+        'songs_display': songs_display,
+        'thumbnail': thumbnail_url
     }
     
     # Create Embed
     embed = discord.Embed(
         title="🎲 Mystery Playlist Generated!",
         description="Listen to the songs below and use `/guess` to vote for who picked them!",
-        color=discord.Color.gold()
+        color=discord.Color(0x1DB954)  # Spotify Green
     )
-    embed.add_field(name="The Songs", value="\n".join(songs_display), inline=False)
+    
+    if thumbnail_url:
+        embed.set_thumbnail(url=thumbnail_url)
+        
+    embed.add_field(name="The Songs", value="\n\n".join(songs_display), inline=False)
     
     await interaction.followup.send(embed=embed)
 
@@ -1004,11 +1016,14 @@ async def guess(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎵 Who's Playlist Is This?",
         description="Vote for the person you think chose the songs!",
-        color=discord.Color.purple()
+        color=discord.Color(0x1DB954)
     )
     
+    if active_game.get('thumbnail'):
+        embed.set_thumbnail(url=active_game['thumbnail'])
+    
     # Show songs again for context
-    embed.add_field(name="The Songs", value="\n".join(active_game['songs_display']), inline=False)
+    embed.add_field(name="The Songs", value="\n\n".join(active_game['songs_display']), inline=False)
     embed.set_footer(text="Vote by clicking a button below! Results in 30s.")
     
     view = GuessGameView(active_game['target_name'], active_game['options'])
